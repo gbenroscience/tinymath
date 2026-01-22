@@ -1,6 +1,6 @@
 /* diff_module.h
  * Minimal symbolic differentiation for your math parser.
- * Depends on: define_func(...), lookup_func(...), set_var(...), lookup_var(...)
+ * Depends on: define_func(...), lookup_func(...).
  * Compile with: -lm
  */
 
@@ -21,23 +21,22 @@ typedef struct Node {
     NodeType type;
     double num;           /* N_NUM */
     char name[32];        /* N_VAR or N_FUNC */
-    char op;              /* N_OP: '+','-','*','/','^' */
+    char op;              /* N_OP: '+','-','*','/' */
     struct Node *a, *b;   /* binary for N_OP */
     struct Node *args[4]; /* up to 4 args for N_FUNC (sin,cos,log,exp,pow) */
     int n_args;
 } Node;
 
 static Node* nd_num(double v){ Node* n=(Node*)calloc(1,sizeof(Node)); n->type=N_NUM; n->num=v; return n; }
-static Node* nd_var(const char* s){ Node* n=(Node*)calloc(1,sizeof(Node)); n->type=N_VAR; strncpy(n->name,s,sizeof(n->name)-1); return n; }
+static Node* nd_var(const char* s){ Node* n=(Node*)calloc(1,sizeof(Node)); n->type=N_VAR; snprintf(n->name,sizeof(n->name),"%s",s); return n; }
 static Node* nd_op(char op, Node* a, Node* b){ Node* n=(Node*)calloc(1,sizeof(Node)); n->type=N_OP; n->op=op; n->a=a; n->b=b; return n; }
-static Node* nd_func(const char* f, Node* x){ Node* n=(Node*)calloc(1,sizeof(Node)); n->type=N_FUNC; strncpy(n->name,f,sizeof(n->name)-1); n->args[0]=x; n->n_args=1; return n; }
-static Node* nd_pow(Node* u, Node* v){ Node* n=(Node*)calloc(1,sizeof(Node)); n->type=N_FUNC; strncpy(n->name,"pow",sizeof(n->name)-1); n->args[0]=u; n->args[1]=v; n->n_args=2; return n; }
+static Node* nd_func(const char* f, Node* x){ Node* n=(Node*)calloc(1,sizeof(Node)); n->type=N_FUNC; snprintf(n->name,sizeof(n->name),"%s",f); n->args[0]=x; n->n_args=1; return n; }
+static Node* nd_pow(Node* u, Node* v){ Node* n=(Node*)calloc(1,sizeof(Node)); n->type=N_FUNC; snprintf(n->name,sizeof(n->name),"%s","pow"); n->args[0]=u; n->args[1]=v; n->n_args=2; return n; }
 
 static Node* nd_copy(Node* n){
     if(!n) return NULL;
     Node* r=(Node*)calloc(1,sizeof(Node));
     memcpy(r,n,sizeof(Node));
-    /* deep copy children */
     if(n->type==N_OP){ r->a=nd_copy(n->a); r->b=nd_copy(n->b); }
     else if(n->type==N_FUNC){ for(int i=0;i<n->n_args;i++) r->args[i]=nd_copy(n->args[i]); }
     return r;
@@ -84,17 +83,14 @@ static Node* d_parse_primary(DLex* lx){
     if(d_accept(lx,'+')) return d_parse_primary(lx);
     if(d_accept(lx,'-')) return nd_op('-', nd_num(0), d_parse_primary(lx));
 
-    /* number */
     Node* num=d_parse_number(lx);
     if(num) return num;
 
-    /* identifier or function */
     if(lx->i<lx->len && (isalpha((unsigned char)lx->s[lx->i]) || lx->s[lx->i]=='_')){
         char id[64]; size_t j=0;
         while(lx->i<lx->len && d_is_ident_char(lx->s[lx->i]) && j<sizeof(id)-1) id[j++]=lx->s[lx->i++];
         id[j]='\0';
         if(d_accept(lx,'(')){
-            /* function call: one or two args supported (sin,cos,exp,log,pow) */
             Node* args[2]={0}; int n=0;
             if(!d_accept(lx,')')){
                 args[n++]=d_parse_expr(lx);
@@ -103,12 +99,11 @@ static Node* d_parse_primary(DLex* lx){
             }
             if(strcmp(id,"pow")==0 && n==2) return nd_pow(args[0],args[1]);
             if(n==1) return nd_func(id,args[0]);
-            /* fallback: treat as variable if arity unexpected */
             return nd_var(id);
         }
         return nd_var(id);
     }
-    return nd_num(0); /* graceful fallback */
+    return nd_num(0);
 }
 
 static Node* d_parse_factor(DLex* lx){
@@ -166,7 +161,7 @@ static Node* d_diff(Node* n, const char* x){
                 case '/': return nd_op('/',
                                   nd_op('-', nd_op('*', d_diff(u,x), nd_copy(v)),
                                                nd_op('*', nd_copy(u), d_diff(v,x))),
-                                  nd_op('^', nd_copy(v), nd_num(2)));
+                                  nd_pow(nd_copy(v), nd_num(2)));
                 default: return nd_num(0);
             }
         }
@@ -179,7 +174,6 @@ static Node* d_diff(Node* n, const char* x){
             if(strcmp(f,"log")==0) return nd_op('*', nd_op('/', nd_num(1), nd_copy(u)), d_diff(u,x));
             if(strcmp(f,"pow")==0){
                 Node* a=n->args[0]; Node* b=n->args[1];
-                /* Handle a^k (k constant) and a^b (general) */
                 if(b->type==N_NUM){
                     double k=b->num;
                     return nd_op('*',
@@ -196,7 +190,6 @@ static Node* d_diff(Node* n, const char* x){
                            ));
                 }
             }
-            /* Unknown function: treat as f'(u) = f'(u) * u' with f'(u) unknown → 0 */
             return nd_num(0);
         }
     }
@@ -233,11 +226,12 @@ static Node* s_simpl(Node* n){
 
 static void p_buf(char** out, size_t* cap, const char* s){
     size_t need=strlen(s);
-    if(need+1 > *cap){
-        *cap = (*cap + need + 64);
+    size_t cur=strlen(*out);
+    if(cur+need+1 > *cap){
+        *cap = (cur+need+64);
         *out = (char*)realloc(*out, *cap);
     }
-    strcat(*out, s);
+    memcpy(*out+cur, s, need+1);
 }
 
 static void p_node_rec(Node* n, char** out, size_t* cap);
@@ -263,13 +257,9 @@ static void p_node_rec(Node* n, char** out, size_t* cap){
                 snprintf(tmp,sizeof(tmp)," %c ", n->op); p_buf(out,cap,tmp);
                 p_node_rec(n->b,out,cap);
             } else if(n->op=='*'){
-                /* add minimal parentheses for clarity */
                 p_wrap(n->a,out,cap); p_buf(out,cap,"*"); p_wrap(n->b,out,cap);
             } else if(n->op=='/'){
                 p_wrap(n->a,out,cap); p_buf(out,cap,"/"); p_wrap(n->b,out,cap);
-            } else {
-                /* should not occur; '^' is encoded as pow */
-                p_wrap(n->a,out,cap); p_buf(out,cap,"^"); p_wrap(n->b,out,cap);
             }
             break;
         case N_FUNC:
@@ -308,20 +298,17 @@ static char* diff_expr(const char* expr, const char* var){
 
 /* Create a derivative function: dst_name(params...) = d/d(wrt) src_name(body) */
 static int diff_func(const char* src_name, const char* wrt, const char* dst_name){
-    extern mp_func* lookup_func(const char*);   /* provided by your parser */
+    extern struct mp_func* lookup_func(const char*);   /* provided by your parser */
     extern int define_func(const char*, char[][64], int, const char*);
 
-    mp_func* f = lookup_func(src_name);
+    struct mp_func* f = lookup_func(src_name);
     if(!f){ fprintf(stderr,"diff_func: unknown function %s\n", src_name); return 0; }
 
-    /* Build derivative of body w.r.t wrt */
     char* body_d = diff_expr(f->body, wrt);
 
-    /* Reuse same parameter list */
     char params[16][64];
     for(int i=0;i<f->n_params;i++){
-        strncpy(params[i], f->params[i], sizeof(params[i])-1);
-        params[i][sizeof(params[i])-1]='\0';
+        snprintf(params[i], sizeof(params[i]), "%s", f->params[i]);
     }
 
     int ok = define_func(dst_name, params, f->n_params, body_d);
