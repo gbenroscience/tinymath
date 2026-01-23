@@ -432,9 +432,9 @@ static double parse_program(mp_parser *p) {
     int has_value = 0;
 
     while (p->cur.kind != TK_END) {
-        size_t stmt_start = p->cur.pos;   // <-- use cur.pos before parsing
+        size_t stmt_start = p->cur.pos;   // mark start BEFORE parsing
         StmtResult r = parse_statement(p);
-        size_t stmt_end = p->lx.i;
+        size_t stmt_end = p->lx.i;        // mark end AFTER parsing
 
         size_t len = stmt_end - stmt_start;
         char stmt[256];
@@ -455,6 +455,7 @@ static double parse_program(mp_parser *p) {
 
     return has_value ? last_value : 0.0;
 }
+
 
 
 
