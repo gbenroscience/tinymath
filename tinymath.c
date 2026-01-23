@@ -1,5 +1,5 @@
 /*
- * math_parser_full_fixed.c
+ * tinymath.c
  * Recursive-descent math parser with variables, built-in functions,
  * user-defined functions, and proper distinction between definitions and calls.
  *
