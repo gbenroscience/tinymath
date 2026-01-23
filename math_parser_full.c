@@ -427,17 +427,34 @@ static double parse_program(mp_parser *p) {
     double last_value = NAN;
     int has_value = 0;
 
-    while (p->cur.kind != TK_END) {
-        StmtResult r = parse_statement(p);
-        if (r.kind == STMT_VALUE) {
-            last_value = r.value;
-            has_value = 1;
-        }
-        accept(p, TK_SEMI);  // optional semicolon
+while (p->cur.kind != TK_END) {
+    size_t stmt_start = p->lx.i;   // mark start before parsing
+    StmtResult r = parse_statement(p);
+    size_t stmt_end = p->lx.i;     // mark end after parsing
+
+    size_t len = stmt_end - stmt_start;
+    char stmt[256];
+    if (len >= sizeof(stmt)) len = sizeof(stmt)-1;
+    memcpy(stmt, p->lx.input + stmt_start, len);
+    stmt[len] = '\0';
+
+    if (r.kind == STMT_VALUE) {
+        printf("%s => %.6f\n", stmt, r.value);
+        last_value = r.value;
+        has_value = 1;
+    } else if (r.kind == STMT_DEFINITION) {
+        printf("%s => function defined\n", stmt);
     }
+
+    accept(p, TK_SEMI);
+}
+
+
+
 
     return has_value ? last_value : 0.0;
 }
+
 
 /* ---------------- Demo ---------------- */
 int main(void) {
