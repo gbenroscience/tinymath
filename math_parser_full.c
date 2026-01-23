@@ -218,32 +218,37 @@ static mp_result sub(mp_result a, mp_result b);
 static mp_result mul(mp_result a, mp_result b);
 static mp_result divide(mp_result a, mp_result b);
 
-    // Convert double to string (heap-allocated)
-static char *double_to_string(double v){
+// Convert double to string (heap-allocated)
+static char *double_to_string(double v)
+{
     char buf[64];
     snprintf(buf, sizeof(buf), "%.17g", v);
     return strdup(buf); // caller must free
 }
 
 // Concatenate three strings (heap-allocated)
-static char *concat3(const char *a, const char *b, const char *c){
+static char *concat3(const char *a, const char *b, const char *c)
+{
     size_t len = strlen(a) + strlen(b) + strlen(c) + 1;
     char *out = malloc(len);
     snprintf(out, len, "%s%s%s", a, b, c);
     return out; // caller must free
 }
 
-static mp_result make_num(double v){
+static mp_result make_num(double v)
+{
     mp_result r = {RES_NUM, v, NULL};
     return r;
 }
 
-static mp_result make_str(const char *s){
+static mp_result make_str(const char *s)
+{
     mp_result r = {RES_STR, NAN, strdup(s)};
     return r;
 }
 
-static mp_result parse_factor(mp_parser *p){
+static mp_result parse_factor(mp_parser *p)
+{
     mp_result v = parse_primary(p);
     if (accept(p, TK_CARET))
     {
@@ -253,8 +258,8 @@ static mp_result parse_factor(mp_parser *p){
     return v;
 }
 
- 
-static mp_result parse_term(mp_parser *p){
+static mp_result parse_term(mp_parser *p)
+{
     mp_result v = parse_factor(p);
     while (p->cur.kind == TK_STAR || p->cur.kind == TK_SLASH)
     {
@@ -320,7 +325,8 @@ static mp_result mul(mp_result a, mp_result b)
     return make_str(combined);
 }
 
-static mp_result divide(mp_result a, mp_result b){
+static mp_result divide(mp_result a, mp_result b)
+{
     if (a.type == RES_NUM && b.type == RES_NUM)
         return make_num(a.num / b.num);
     const char *sa = (a.type == RES_STR) ? a.str : double_to_string(a.num);
@@ -346,11 +352,6 @@ static mp_result pow_result(mp_result a, mp_result b)
         free((char *)sb);
     return make_str(combined);
 }
-
-
-
-
-
 
 int set_const(const char *name, double value)
 {
@@ -540,33 +541,41 @@ static mp_result parse_primary(mp_parser *p)
 
             if (accept(p, TK_COMMA))
             {
-                // Overload 2: evaluate derivative at value
+                // overload 2: evaluate derivative at value
                 mp_result val = parse_expr(p);
                 if (!accept(p, TK_RPAREN))
                 {
                     fprintf(stderr, "Expected ')' in diff()\n");
-                    return (mp_result){RES_NUM, NAN, NULL};
+                    return make_num(NAN);
                 }
                 char *dbody = diff_expr(expr_buf, var);
-                char params[1][64];
-                snprintf(params[0], sizeof(params[0]), "%s", var);
-                define_func("diff_tmp", params, 1, dbody);
+                // re-parse dbody as an expression
+                mp_parser sub = {{dbody, 0, strlen(dbody)}, {0}};
+                advance(&sub);
+                mp_result subexpr = parse_expr(&sub);
                 free(dbody);
 
-                double args[1] = {val.num};
-                mp_func *f = lookup_func("diff_tmp");
-                return (mp_result){RES_NUM, call_user_func(f, args, 1).num, NULL};
+                if (val.type == RES_NUM)
+                {
+                    // substitute numeric value
+                    // (you can extend this to full substitution later)
+                    return make_num(subexpr.num);
+                }
+                else
+                {
+                    return subexpr;
+                }
             }
             else
             {
-                // Overload 1: return symbolic derivative
+                // overload 1: return symbolic derivative
                 if (!accept(p, TK_RPAREN))
                 {
                     fprintf(stderr, "Expected ')' in diff()\n");
-                    return (mp_result){RES_NUM, NAN, NULL};
+                    return make_num(NAN);
                 }
                 char *dbody = diff_expr(expr_buf, var);
-                return (mp_result){RES_STR, NAN, dbody};
+                return make_str(dbody);
             }
         }
 

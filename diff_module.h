@@ -287,16 +287,36 @@ static char* ast_to_string(Node* n){
 }
 
 /* ---------- Public API ---------- */
- 
+
 /* Returns a heap-allocated string with d/d(var) expr; caller must free(). */
-static char* diff_expr(const char* expr, const char* var){
+static char* diff_expr(const char* expr, const char* var) {
+    if (!expr || !var) {
+        fprintf(stderr, "diff_expr: null input\n");
+        return strdup("NaN");
+    }
+
     Node* ast = parse_to_ast(expr);
-    Node* d   = d_diff(ast, var);
-    d = s_simpl(d);
-    char* s = ast_to_string(d);
-    nd_free(d); nd_free(ast);
-    return s;
+    if (!ast) {
+        fprintf(stderr, "diff_expr: failed to parse expression: %s\n", expr);
+        return strdup("NaN");
+    }
+
+    Node* d = d_diff(ast, var);
+    if (!d) {
+        fprintf(stderr, "diff_expr: differentiation failed\n");
+        nd_free(ast);
+        return strdup("NaN");
+    }
+
+    Node* simplified = s_simpl(d);
+    char* result = ast_to_string(simplified);
+
+    nd_free(simplified);
+    nd_free(ast);
+
+    return result;
 }
+
 
 /* Create a derivative function: dst_name(params...) = d/d(wrt) src_name(body) */
 static int diff_func(const char* src_name, const char* wrt, const char* dst_name){
