@@ -258,50 +258,71 @@ static double parse_primary(mp_parser *p) {
         snprintf(name, sizeof(name), "%s", p->cur.ident);
         advance(p);
         // Handle diff(...)
-        if (strcmp(name, "diff") == 0 && accept(p, TK_LPAREN)) {
-            size_t expr_start = p->cur.pos;
-            parse_expr(p);   // parse inner expression
-            size_t expr_end = p->lx.i;
+if (strcmp(name, "diff") == 0 && accept(p, TK_LPAREN)) {
+    // First argument: expression substring
+    size_t expr_start = p->cur.pos;
+    parse_expr(p); // consume expression
+    size_t expr_end = p->lx.i;
 
-            size_t len = expr_end - expr_start;
-            char expr_buf[1024];
-            if (len >= sizeof(expr_buf)) len = sizeof(expr_buf)-1;
-            memcpy(expr_buf, p->lx.input + expr_start, len);
-            expr_buf[len] = '\0';
+    size_t len = expr_end - expr_start;
+    char expr_buf[1024];
+    if (len >= sizeof(expr_buf)) len = sizeof(expr_buf)-1;
+    memcpy(expr_buf, p->lx.input + expr_start, len);
+    expr_buf[len] = '\0';
 
-            if (!accept(p, TK_COMMA)) {
-                fprintf(stderr, "Expected ',' in diff()\n");
-                return NAN;
-            }
+    if (!accept(p, TK_COMMA)) {
+        fprintf(stderr, "Expected ',' in diff()\n");
+        return NAN;
+    }
 
-            if (p->cur.kind != TK_IDENT) {
-                fprintf(stderr, "Expected variable in diff()\n");
-                return NAN;
-            }
-            char var[64];
-            snprintf(var, sizeof(var), "%s", p->cur.ident);
-            advance(p);
+    // Second argument: variable name
+    if (p->cur.kind != TK_IDENT) {
+        fprintf(stderr, "Expected variable in diff()\n");
+        return NAN;
+    }
+    char var[64];
+    snprintf(var, sizeof(var), "%s", p->cur.ident);
+    advance(p);
 
-            if (!accept(p, TK_RPAREN)) {
-                fprintf(stderr, "Expected ')' in diff()\n");
-                return NAN;
-            }
+    double eval_value = NAN;
+    int has_third_arg = 0;
 
-            // Symbolic differentiation
-            char* dbody = diff_expr(expr_buf, var);
-            printf("Derivative: %s\n", dbody);  // optional: show symbolic form
+    // Optional third argument
+    if (accept(p, TK_COMMA)) {
+        eval_value = parse_expr(p);
+        has_third_arg = 1;
+    }
 
-            char params[1][64];
-            snprintf(params[0], sizeof(params[0]), "%s", var);
-            define_func("diff_tmp", params, 1, dbody);
-            free(dbody);
+    if (!accept(p, TK_RPAREN)) {
+        fprintf(stderr, "Expected ')' in diff()\n");
+        return NAN;
+    }
 
-            double v;
-            if (!lookup_var(var, &v)) v = 0.0;
-            double args[1] = {v};
-            mp_func* f = lookup_func("diff_tmp");
-            return call_user_func(f, args, 1);
-        }
+    // Get symbolic derivative
+    char* dbody = diff_expr(expr_buf, var);
+
+    if (!has_third_arg) {
+        // Overload 1: return symbolic derivative as a function string
+        printf("Derivative: %s\n", dbody);
+        // Define temporary function diff_tmp(var) = dbody
+        char params[1][64];
+        snprintf(params[0], sizeof(params[0]), "%s", var);
+        define_func("diff_tmp", params, 1, dbody);
+        free(dbody);
+        return NAN; // or some sentinel, since symbolic only
+    } else {
+        // Overload 2: evaluate derivative at given value
+        char params[1][64];
+        snprintf(params[0], sizeof(params[0]), "%s", var);
+        define_func("diff_tmp", params, 1, dbody);
+        free(dbody);
+
+        double args[1] = {eval_value};
+        mp_func* f = lookup_func("diff_tmp");
+        return call_user_func(f, args, 1);
+    }
+}
+
         if (accept(p, TK_LPAREN)) {
             double args[32]; int n = 0;
             if (!accept(p, TK_RPAREN)) {
@@ -584,7 +605,8 @@ const char *script =
     "pi=3.14159;"
     "sin(pi/2);"
     "f(2,5);"
-    "diff(sin(x), x);";
+    "diff(sin(x), x);"
+    "diff(sin(x), x, pi);";
 
 
     printf("Input program:\n%s\n\n", script);
