@@ -40,241 +40,6 @@ typedef struct
 static mp_var vars[MAX_VARS];
 static int n_vars = 0;
 
-static mp_result make_num(double v)
-{
-    mp_result r = {RES_NUM, v, NULL};
-    return r;
-}
-
-static mp_result make_str(const char *s)
-{
-    mp_result r = {RES_STR, NAN, strdup(s)};
-    return r;
-}
-
-static mp_result add(mp_result a, mp_result b)
-{
-    if (a.type == RES_NUM && b.type == RES_NUM)
-        return make_num(a.num + b.num);
-    const char *sa = (a.type == RES_STR) ? a.str : double_to_string(a.num);
-    const char *sb = (b.type == RES_STR) ? b.str : double_to_string(b.num);
-    char *combined = concat3(sa, " + ", sb);
-    if (a.type == RES_NUM)
-        free((char *)sa);
-    if (b.type == RES_NUM)
-        free((char *)sb);
-    return make_str(combined);
-}
-
-static mp_result sub(mp_result a, mp_result b)
-{
-    if (a.type == RES_NUM && b.type == RES_NUM)
-        return make_num(a.num - b.num);
-    const char *sa = (a.type == RES_STR) ? a.str : double_to_string(a.num);
-    const char *sb = (b.type == RES_STR) ? b.str : double_to_string(b.num);
-    char *combined = concat3(sa, " - ", sb);
-    if (a.type == RES_NUM)
-        free((char *)sa);
-    if (b.type == RES_NUM)
-        free((char *)sb);
-    return make_str(combined);
-}
-
-static mp_result mul(mp_result a, mp_result b)
-{
-    if (a.type == RES_NUM && b.type == RES_NUM)
-        return make_num(a.num * b.num);
-    const char *sa = (a.type == RES_STR) ? a.str : double_to_string(a.num);
-    const char *sb = (b.type == RES_STR) ? b.str : double_to_string(b.num);
-    char *combined = concat3(sa, " * ", sb);
-    if (a.type == RES_NUM)
-        free((char *)sa);
-    if (b.type == RES_NUM)
-        free((char *)sb);
-    return make_str(combined);
-}
-
-static mp_result div(mp_result a, mp_result b)
-{
-    if (a.type == RES_NUM && b.type == RES_NUM)
-        return make_num(a.num / b.num);
-    const char *sa = (a.type == RES_STR) ? a.str : double_to_string(a.num);
-    const char *sb = (b.type == RES_STR) ? b.str : double_to_string(b.num);
-    char *combined = concat3(sa, " / ", sb);
-    if (a.type == RES_NUM)
-        free((char *)sa);
-    if (b.type == RES_NUM)
-        free((char *)sb);
-    return make_str(combined);
-}
-
-static mp_result pow_result(mp_result a, mp_result b)
-{
-    if (a.type == RES_NUM && b.type == RES_NUM)
-        return make_num(pow(a.num, b.num));
-    const char *sa = (a.type == RES_STR) ? a.str : double_to_string(a.num);
-    const char *sb = (b.type == RES_STR) ? b.str : double_to_string(b.num);
-    char *combined = concat3(sa, "^", sb);
-    if (a.type == RES_NUM)
-        free((char *)sa);
-    if (b.type == RES_NUM)
-        free((char *)sb);
-    return make_str(combined);
-}
-
-static mp_result parse_factor(mp_parser *p)
-{
-    mp_result v = parse_primary(p);
-    if (accept(p, TK_CARET))
-    {
-        mp_result rhs = parse_factor(p);
-        v = pow_result(v, rhs); // symbolic-aware pow
-    }
-    return v;
-}
-static mp_result parse_term(mp_parser *p)
-{
-    mp_result v = parse_factor(p);
-    while (p->cur.kind == TK_STAR || p->cur.kind == TK_SLASH)
-    {
-        mp_tok_kind op = p->cur.kind;
-        advance(p);
-        mp_result rhs = parse_factor(p);
-        v = (op == TK_STAR) ? mul(v, rhs) : div(v, rhs);
-    }
-    return v;
-}
-static mp_result parse_expr(mp_parser *p)
-{
-    mp_result v = parse_term(p);
-    while (p->cur.kind == TK_PLUS || p->cur.kind == TK_MINUS)
-    {
-        mp_tok_kind op = p->cur.kind;
-        advance(p);
-        mp_result rhs = parse_term(p);
-        v = (op == TK_PLUS) ? add(v, rhs) : sub(v, rhs);
-    }
-    return v;
-}
-
-// Convert double to string
-static char *double_to_string(double v)
-{
-    char buf[64];
-    snprintf(buf, sizeof(buf), "%.17g", v);
-    return strdup(buf);
-}
-
-// Concatenate three strings
-static char *concat3(const char *a, const char *b, const char *c)
-{
-    size_t len = strlen(a) + strlen(b) + strlen(c) + 1;
-    char *out = malloc(len);
-    snprintf(out, len, "%s%s%s", a, b, c);
-    return out;
-}
-
-// Constructors
-static mp_result make_num(double v)
-{
-    mp_result r = {RES_NUM, v, NULL};
-    return r;
-}
-
-static mp_result make_str(const char *s)
-{
-    mp_result r = {RES_STR, NAN, strdup(s)};
-    return r;
-}
-
-int set_const(const char *name, double value)
-{
-    if (n_vars < 128)
-    {
-        snprintf(vars[n_vars].name, sizeof(vars[n_vars].name), "%s", name);
-        vars[n_vars].value = value;
-        vars[n_vars].is_const = 1; // mark as constant
-        n_vars++;
-        return 1;
-    }
-    fprintf(stderr, "Variable table full\n");
-    return 0;
-}
-
-int set_var(const char *name, double value)
-{
-    for (int i = 0; i < n_vars; i++)
-    {
-        if (strcmp(vars[i].name, name) == 0)
-        {
-            if (vars[i].is_const)
-            {
-                fprintf(stderr, "Error: cannot redefine constant %s\n", name);
-                return 0;
-            }
-            vars[i].value = value;
-            return 1;
-        }
-    }
-    if (n_vars < MAX_VARS)
-    {
-        snprintf(vars[n_vars].name, sizeof(vars[n_vars].name), "%s", name);
-        vars[n_vars].value = value;
-        vars[n_vars].is_const = 0; // default: normal variable
-        n_vars++;
-        return 1;
-    }
-    fprintf(stderr, "Variable table full\n");
-    return 0;
-}
-
-static int lookup_var(const char *name, double *out)
-{
-    for (int i = 0; i < n_vars; i++)
-    {
-        if (strcmp(vars[i].name, name) == 0)
-        {
-            *out = vars[i].value;
-            return 1;
-        }
-    }
-    return 0;
-}
-
-/* ---------------- Function Table ---------------- */
-
-#define MAX_FUNCS 128
-static mp_func funcs[MAX_FUNCS];
-static int n_funcs = 0;
-
-int define_func(const char *name, char params[][64], int n_params, const char *body)
-{
-    if (n_funcs >= MAX_FUNCS)
-    {
-        fprintf(stderr, "Function table full\n");
-        return 0;
-    }
-    snprintf(funcs[n_funcs].name, sizeof(funcs[n_funcs].name), "%s", name);
-    funcs[n_funcs].n_params = n_params;
-    for (int i = 0; i < n_params; i++)
-    {
-        snprintf(funcs[n_funcs].params[i], sizeof(funcs[n_funcs].params[i]), "%s", params[i]);
-    }
-    snprintf(funcs[n_funcs].body, sizeof(funcs[n_funcs].body), "%s", body);
-    n_funcs++;
-    return 1;
-}
-
-mp_func *lookup_func(const char *name)
-{
-    for (int i = 0; i < n_funcs; i++)
-    {
-        if (strcmp(funcs[i].name, name) == 0)
-            return &funcs[i];
-    }
-    return NULL;
-}
-
 /* ---------------- Lexer ---------------- */
 typedef enum
 {
@@ -442,8 +207,238 @@ static int accept(mp_parser *p, mp_tok_kind k)
     }
     return 0;
 }
+/* ------------------ Forward declarations ------------------ */
+static mp_result parse_term(mp_parser *p);
+static mp_result parse_factor(mp_parser *p);
+static mp_result parse_primary(mp_parser *p);
+static mp_result pow_result(mp_result a, mp_result b);
+static mp_result parse_expr(mp_parser *p);
+static mp_result add(mp_result a, mp_result b);
+static mp_result sub(mp_result a, mp_result b);
+static mp_result mul(mp_result a, mp_result b);
+static mp_result divide(mp_result a, mp_result b);
 
-static mp_result parse_expr(mp_parser *p); /* forward */
+    // Convert double to string (heap-allocated)
+static char *double_to_string(double v){
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%.17g", v);
+    return strdup(buf); // caller must free
+}
+
+// Concatenate three strings (heap-allocated)
+static char *concat3(const char *a, const char *b, const char *c){
+    size_t len = strlen(a) + strlen(b) + strlen(c) + 1;
+    char *out = malloc(len);
+    snprintf(out, len, "%s%s%s", a, b, c);
+    return out; // caller must free
+}
+
+static mp_result make_num(double v){
+    mp_result r = {RES_NUM, v, NULL};
+    return r;
+}
+
+static mp_result make_str(const char *s){
+    mp_result r = {RES_STR, NAN, strdup(s)};
+    return r;
+}
+
+static mp_result parse_factor(mp_parser *p){
+    mp_result v = parse_primary(p);
+    if (accept(p, TK_CARET))
+    {
+        mp_result rhs = parse_factor(p);
+        v = pow_result(v, rhs);
+    }
+    return v;
+}
+
+ 
+static mp_result parse_term(mp_parser *p){
+    mp_result v = parse_factor(p);
+    while (p->cur.kind == TK_STAR || p->cur.kind == TK_SLASH)
+    {
+        mp_tok_kind op = p->cur.kind;
+        advance(p);
+        mp_result rhs = parse_factor(p);
+        v = (op == TK_STAR) ? mul(v, rhs) : divide(v, rhs);
+    }
+    return v;
+}
+
+static mp_result parse_expr(mp_parser *p)
+{
+    mp_result v = parse_term(p);
+    while (p->cur.kind == TK_PLUS || p->cur.kind == TK_MINUS)
+    {
+        mp_tok_kind op = p->cur.kind;
+        advance(p);
+        mp_result rhs = parse_term(p);
+        v = (op == TK_PLUS) ? add(v, rhs) : sub(v, rhs);
+    }
+    return v;
+}
+static mp_result add(mp_result a, mp_result b)
+{
+    if (a.type == RES_NUM && b.type == RES_NUM)
+        return make_num(a.num + b.num);
+    const char *sa = (a.type == RES_STR) ? a.str : double_to_string(a.num);
+    const char *sb = (b.type == RES_STR) ? b.str : double_to_string(b.num);
+    char *combined = concat3(sa, " + ", sb);
+    if (a.type == RES_NUM)
+        free((char *)sa);
+    if (b.type == RES_NUM)
+        free((char *)sb);
+    return make_str(combined);
+}
+
+static mp_result sub(mp_result a, mp_result b)
+{
+    if (a.type == RES_NUM && b.type == RES_NUM)
+        return make_num(a.num - b.num);
+    const char *sa = (a.type == RES_STR) ? a.str : double_to_string(a.num);
+    const char *sb = (b.type == RES_STR) ? b.str : double_to_string(b.num);
+    char *combined = concat3(sa, " - ", sb);
+    if (a.type == RES_NUM)
+        free((char *)sa);
+    if (b.type == RES_NUM)
+        free((char *)sb);
+    return make_str(combined);
+}
+
+static mp_result mul(mp_result a, mp_result b)
+{
+    if (a.type == RES_NUM && b.type == RES_NUM)
+        return make_num(a.num * b.num);
+    const char *sa = (a.type == RES_STR) ? a.str : double_to_string(a.num);
+    const char *sb = (b.type == RES_STR) ? b.str : double_to_string(b.num);
+    char *combined = concat3(sa, " * ", sb);
+    if (a.type == RES_NUM)
+        free((char *)sa);
+    if (b.type == RES_NUM)
+        free((char *)sb);
+    return make_str(combined);
+}
+
+static mp_result divide(mp_result a, mp_result b){
+    if (a.type == RES_NUM && b.type == RES_NUM)
+        return make_num(a.num / b.num);
+    const char *sa = (a.type == RES_STR) ? a.str : double_to_string(a.num);
+    const char *sb = (b.type == RES_STR) ? b.str : double_to_string(b.num);
+    char *combined = concat3(sa, " / ", sb);
+    if (a.type == RES_NUM)
+        free((char *)sa);
+    if (b.type == RES_NUM)
+        free((char *)sb);
+    return make_str(combined);
+}
+
+static mp_result pow_result(mp_result a, mp_result b)
+{
+    if (a.type == RES_NUM && b.type == RES_NUM)
+        return make_num(pow(a.num, b.num));
+    const char *sa = (a.type == RES_STR) ? a.str : double_to_string(a.num);
+    const char *sb = (b.type == RES_STR) ? b.str : double_to_string(b.num);
+    char *combined = concat3(sa, "^", sb);
+    if (a.type == RES_NUM)
+        free((char *)sa);
+    if (b.type == RES_NUM)
+        free((char *)sb);
+    return make_str(combined);
+}
+
+
+
+
+
+
+int set_const(const char *name, double value)
+{
+    if (n_vars < 128)
+    {
+        snprintf(vars[n_vars].name, sizeof(vars[n_vars].name), "%s", name);
+        vars[n_vars].value = value;
+        vars[n_vars].is_const = 1; // mark as constant
+        n_vars++;
+        return 1;
+    }
+    fprintf(stderr, "Variable table full\n");
+    return 0;
+}
+
+int set_var(const char *name, double value)
+{
+    for (int i = 0; i < n_vars; i++)
+    {
+        if (strcmp(vars[i].name, name) == 0)
+        {
+            if (vars[i].is_const)
+            {
+                fprintf(stderr, "Error: cannot redefine constant %s\n", name);
+                return 0;
+            }
+            vars[i].value = value;
+            return 1;
+        }
+    }
+    if (n_vars < MAX_VARS)
+    {
+        snprintf(vars[n_vars].name, sizeof(vars[n_vars].name), "%s", name);
+        vars[n_vars].value = value;
+        vars[n_vars].is_const = 0; // default: normal variable
+        n_vars++;
+        return 1;
+    }
+    fprintf(stderr, "Variable table full\n");
+    return 0;
+}
+
+static int lookup_var(const char *name, double *out)
+{
+    for (int i = 0; i < n_vars; i++)
+    {
+        if (strcmp(vars[i].name, name) == 0)
+        {
+            *out = vars[i].value;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* ---------------- Function Table ---------------- */
+
+#define MAX_FUNCS 128
+static mp_func funcs[MAX_FUNCS];
+static int n_funcs = 0;
+
+int define_func(const char *name, char params[][64], int n_params, const char *body)
+{
+    if (n_funcs >= MAX_FUNCS)
+    {
+        fprintf(stderr, "Function table full\n");
+        return 0;
+    }
+    snprintf(funcs[n_funcs].name, sizeof(funcs[n_funcs].name), "%s", name);
+    funcs[n_funcs].n_params = n_params;
+    for (int i = 0; i < n_params; i++)
+    {
+        snprintf(funcs[n_funcs].params[i], sizeof(funcs[n_funcs].params[i]), "%s", params[i]);
+    }
+    snprintf(funcs[n_funcs].body, sizeof(funcs[n_funcs].body), "%s", body);
+    n_funcs++;
+    return 1;
+}
+
+mp_func *lookup_func(const char *name)
+{
+    for (int i = 0; i < n_funcs; i++)
+    {
+        if (strcmp(funcs[i].name, name) == 0)
+            return &funcs[i];
+    }
+    return NULL;
+}
 
 /* Built-in functions */
 static double call_builtin(const char *name, double *args, int n)
@@ -634,43 +629,6 @@ static mp_result parse_primary(mp_parser *p)
 
     fprintf(stderr, "Unexpected token in primary (pos %zu)\n", p->cur.pos);
     return (mp_result){RES_NUM, NAN, NULL};
-}
-
-static mp_result parse_factor(mp_parser *p)
-{
-    mp_result v = parse_primary(p);
-    if (accept(p, TK_CARET))
-    {
-        mp_result rhs = parse_factor(p);
-        v = pow_result(v, rhs);
-    }
-    return v;
-}
-
-static mp_result parse_term(mp_parser *p)
-{
-    mp_result v = parse_factor(p);
-    while (p->cur.kind == TK_STAR || p->cur.kind == TK_SLASH)
-    {
-        mp_tok_kind op = p->cur.kind;
-        advance(p);
-        mp_result rhs = parse_factor(p);
-        v = (op == TK_STAR) ? mul(v, rhs) : div(v, rhs);
-    }
-    return v;
-}
-
-static mp_result parse_expr(mp_parser *p)
-{
-    mp_result v = parse_term(p);
-    while (p->cur.kind == TK_PLUS || p->cur.kind == TK_MINUS)
-    {
-        mp_tok_kind op = p->cur.kind;
-        advance(p);
-        mp_result rhs = parse_term(p);
-        v = (op == TK_PLUS) ? add(v, rhs) : sub(v, rhs);
-    }
-    return v;
 }
 
 /* ------------------ Function definition ------------------ */
@@ -955,6 +913,7 @@ int main(void)
         "sin(pi/2);"
         "f(2,5);"
         "diff(sin(x), x);"
+        "diff(diff(sin(x), x), x);"
         "diff(sin(x), x, pi);";
 
     printf("Input program:\n%s\n\n", script);
