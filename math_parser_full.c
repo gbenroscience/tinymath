@@ -12,6 +12,8 @@
 #include <string.h>
 #include <ctype.h>
 #include <math.h>
+#include "parser_api.h"
+#include "diff_module.h"
 
 /* ---------------- Symbol Table ---------------- */
 typedef struct {
@@ -51,18 +53,13 @@ static int lookup_var(const char *name, double *out) {
 }
 
 /* ---------------- Function Table ---------------- */
-typedef struct {
-    char name[64];
-    char params[16][64];
-    int n_params;
-    char body[1024];
-} mp_func;
+ 
 
 #define MAX_FUNCS 128
 static mp_func funcs[MAX_FUNCS];
 static int n_funcs = 0;
 
-static int define_func(const char *name, char params[][64], int n_params, const char *body) {
+ int define_func(const char *name, char params[][64], int n_params, const char *body) {
     if (n_funcs >= MAX_FUNCS) {
         fprintf(stderr, "Function table full\n");
         return 0;
@@ -77,7 +74,7 @@ static int define_func(const char *name, char params[][64], int n_params, const 
     return 1;
 }
 
-static mp_func* lookup_func(const char *name) {
+ mp_func* lookup_func(const char *name) {
     for (int i = 0; i < n_funcs; i++) {
         if (strcmp(funcs[i].name, name) == 0) return &funcs[i];
     }
@@ -239,6 +236,51 @@ static double parse_primary(mp_parser *p) {
         char name[64];
         snprintf(name, sizeof(name), "%s", p->cur.ident);
         advance(p);
+        // Handle diff(...)
+        if (strcmp(name, "diff") == 0 && accept(p, TK_LPAREN)) {
+            size_t expr_start = p->cur.pos;
+            parse_expr(p);   // parse inner expression
+            size_t expr_end = p->lx.i;
+
+            size_t len = expr_end - expr_start;
+            char expr_buf[1024];
+            if (len >= sizeof(expr_buf)) len = sizeof(expr_buf)-1;
+            memcpy(expr_buf, p->lx.input + expr_start, len);
+            expr_buf[len] = '\0';
+
+            if (!accept(p, TK_COMMA)) {
+                fprintf(stderr, "Expected ',' in diff()\n");
+                return NAN;
+            }
+
+            if (p->cur.kind != TK_IDENT) {
+                fprintf(stderr, "Expected variable in diff()\n");
+                return NAN;
+            }
+            char var[64];
+            snprintf(var, sizeof(var), "%s", p->cur.ident);
+            advance(p);
+
+            if (!accept(p, TK_RPAREN)) {
+                fprintf(stderr, "Expected ')' in diff()\n");
+                return NAN;
+            }
+
+            // Symbolic differentiation
+            char* dbody = diff_expr(expr_buf, var);
+            printf("Derivative: %s\n", dbody);  // optional: show symbolic form
+
+            char params[1][64];
+            snprintf(params[0], sizeof(params[0]), "%s", var);
+            define_func("diff_tmp", params, 1, dbody);
+            free(dbody);
+
+            double v;
+            if (!lookup_var(var, &v)) v = 0.0;
+            double args[1] = {v};
+            mp_func* f = lookup_func("diff_tmp");
+            return call_user_func(f, args, 1);
+        }
         if (accept(p, TK_LPAREN)) {
             double args[32]; int n = 0;
             if (!accept(p, TK_RPAREN)) {
@@ -300,8 +342,7 @@ static double parse_expr(mp_parser *p) {
     return v;
 }
 
-/* ------------------ Function definition ------------------ */
-/* ------------------ Function definition ------------------ */
+/* ------------------ Function definition ------------------ */ 
 static int parse_func_def(mp_parser *p, const char *fname) {
     if (!accept(p, TK_LPAREN)) return 0;
 
@@ -323,7 +364,7 @@ static int parse_func_def(mp_parser *p, const char *fname) {
         return 0;
     }
 
-    /* Capture body text correctly: start at current token position */
+    /* Capture body text correctly */
     size_t body_start = p->cur.pos;
     while (p->cur.kind != TK_SEMI && p->cur.kind != TK_END) {
         advance(p);
@@ -337,11 +378,18 @@ static int parse_func_def(mp_parser *p, const char *fname) {
     memcpy(body, p->lx.input + body_start, len);
     body[len] = '\0';
 
+    /* Strip trailing semicolon if present */
+    size_t blen = strlen(body);
+    if (blen > 0 && body[blen-1] == ';') {
+        body[blen-1] = '\0';
+    }
+
     if (p->cur.kind == TK_SEMI) advance(p);
 
     return define_func(fname, params, n, body);
 }
 
+ 
 
 /* ------------------ Statement result type ------------------ */
 typedef enum {
@@ -410,6 +458,33 @@ static StmtResult parse_statement(mp_parser *p) {
             }
         }
 
+    // Handle differentiation: df(f,x) defines derivative of f wrt x
+    if (strcmp(name, "df") == 0 && accept(p, TK_LPAREN)) {
+        // Expect function name and variable
+        if (p->cur.kind == TK_IDENT) {
+            char src[64]; snprintf(src, sizeof(src), "%s", p->cur.ident);
+            advance(p);
+            if (!accept(p, TK_COMMA)) {
+                fprintf(stderr, "Expected ',' in df()\n");
+                return res;
+            }
+            if (p->cur.kind == TK_IDENT) {
+                char wrt[64]; snprintf(wrt, sizeof(wrt), "%s", p->cur.ident);
+                advance(p);
+                if (!accept(p, TK_RPAREN)) {
+                    fprintf(stderr, "Expected ')' in df()\n");
+                    return res;
+                }
+                // Define derivative function as "d<func>"
+                char dst[128]; snprintf(dst, sizeof(dst), "d%s", src);
+                if (diff_func(src, wrt, dst)) {
+                    res.kind = STMT_DEFINITION;
+                    return res;
+                }
+            }
+        }
+    }
+
         // If we reach here → it's either variable read or function call
         // → rewind to start of name and parse as expression
         p->lx.i = ident_start;
@@ -469,7 +544,8 @@ const char *script =
     "f(20,5);"
     "pi=3.14159;"
     "sin(pi/2);"
-    "f(2,5);";
+    "f(2,5);"
+    "diff(sin(x), x);";
 
 
     printf("Input program:\n%s\n\n", script);

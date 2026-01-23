@@ -12,6 +12,8 @@
 #include <string.h>
 #include <ctype.h>
 #include <math.h>
+#include "parser_api.h"
+
 
 /* ---------- AST ---------- */
 
@@ -20,7 +22,7 @@ typedef enum { N_NUM, N_VAR, N_OP, N_FUNC } NodeType;
 typedef struct Node {
     NodeType type;
     double num;           /* N_NUM */
-    char name[32];        /* N_VAR or N_FUNC */
+    char name[64];        /* N_VAR or N_FUNC */
     char op;              /* N_OP: '+','-','*','/' */
     struct Node *a, *b;   /* binary for N_OP */
     struct Node *args[4]; /* up to 4 args for N_FUNC (sin,cos,log,exp,pow) */
@@ -285,7 +287,7 @@ static char* ast_to_string(Node* n){
 }
 
 /* ---------- Public API ---------- */
-
+ 
 /* Returns a heap-allocated string with d/d(var) expr; caller must free(). */
 static char* diff_expr(const char* expr, const char* var){
     Node* ast = parse_to_ast(expr);
@@ -298,10 +300,11 @@ static char* diff_expr(const char* expr, const char* var){
 
 /* Create a derivative function: dst_name(params...) = d/d(wrt) src_name(body) */
 static int diff_func(const char* src_name, const char* wrt, const char* dst_name){
-    extern struct mp_func* lookup_func(const char*);   /* provided by your parser */
-    extern int define_func(const char*, char[][64], int, const char*);
 
-    struct mp_func* f = lookup_func(src_name);
+     mp_func* lookup_func(const char*);   /* provided by your parser */
+     int define_func(const char*, char[][64], int, const char*);
+
+    mp_func* f = lookup_func(src_name);
     if(!f){ fprintf(stderr,"diff_func: unknown function %s\n", src_name); return 0; }
 
     char* body_d = diff_expr(f->body, wrt);
@@ -315,5 +318,6 @@ static int diff_func(const char* src_name, const char* wrt, const char* dst_name
     free(body_d);
     return ok;
 }
+
 
 #endif /* DIFF_MODULE_H */
