@@ -15,26 +15,47 @@
 #include "parser_api.h"
 #include "diff_module.h"
 
+
+
 /* ---------------- Symbol Table ---------------- */
 typedef struct {
     char name[64];
     double value;
+    int is_const; // 1 = constant, 0 = normal variable
 } mp_var;
 
+ 
 #define MAX_VARS 256
 static mp_var vars[MAX_VARS];
 static int n_vars = 0;
 
-static int set_var(const char *name, double val) {
+int set_const(const char *name, double value) {
+    if (n_vars < 128) {
+        snprintf(vars[n_vars].name, sizeof(vars[n_vars].name), "%s", name);
+        vars[n_vars].value = value;
+        vars[n_vars].is_const = 1;  // mark as constant
+        n_vars++;
+        return 1;
+    }
+    fprintf(stderr, "Variable table full\n");
+    return 0;
+}
+
+int set_var(const char *name, double value) {
     for (int i = 0; i < n_vars; i++) {
         if (strcmp(vars[i].name, name) == 0) {
-            vars[i].value = val;
+            if (vars[i].is_const) {
+                fprintf(stderr, "Error: cannot redefine constant %s\n", name);
+                return 0;
+            }
+            vars[i].value = value;
             return 1;
         }
     }
     if (n_vars < MAX_VARS) {
         snprintf(vars[n_vars].name, sizeof(vars[n_vars].name), "%s", name);
-        vars[n_vars].value = val;
+        vars[n_vars].value = value;
+        vars[n_vars].is_const = 0;  // default: normal variable
         n_vars++;
         return 1;
     }
@@ -500,9 +521,26 @@ static StmtResult parse_statement(mp_parser *p) {
 
     return res;
 }
+/* Define constants at max double precision */
+void init_constants() {
+    set_const("pi", 3.14159265358979323846);          // π
+    set_const("e", 2.71828182845904523536);           // Napier’s constant
+    set_const("c", 299792458.0);                      // speed of light (m/s)
+    set_const("k", 1.380649e-23);                     // Boltzmann constant (J/K)
+    set_const("h", 6.62607015e-34);                   // Planck constant (J·s)
+    set_const("G", 6.67430e-11);                      // Gravitational constant (m^3/kg/s^2)
+    set_const("Na", 6.02214076e23);                   // Avogadro’s number (1/mol)
+}
 
 /* ------------------ Program ------------------ */
 static double parse_program(mp_parser *p) {
+   static int constants_initialized = 0;
+    if (!constants_initialized) {
+        init_constants();          // load constants once
+        constants_initialized = 1; // prevent re‑adding on every run
+    }
+ 
+
     double last_value = NAN;
     int has_value = 0;
 
@@ -518,7 +556,7 @@ static double parse_program(mp_parser *p) {
         stmt[len] = '\0';
 
         if (r.kind == STMT_VALUE) {
-            printf("%s => %.6f\n", stmt, r.value);
+            printf("%s => %.17g\n", stmt, r.value);
             last_value = r.value;
             has_value = 1;
         } else if (r.kind == STMT_DEFINITION) {
@@ -530,6 +568,7 @@ static double parse_program(mp_parser *p) {
 
     return has_value ? last_value : 0.0;
 }
+
 
 
 
@@ -555,12 +594,12 @@ const char *script =
 
     double result = parse_program(&p);
 
-    printf("\nLast evaluated value: %.6f\n", result);
+    printf("\nLast evaluated value: %.17g\n", result);
 
     // Optional: show defined functions and variables
     printf("\nDefined variables:\n");
     for (int i = 0; i < n_vars; i++) {
-        printf("  %s = %.6f\n", vars[i].name, vars[i].value);
+        printf("  %s = %.17g\n", vars[i].name, vars[i].value);
     }
 
     printf("\nDefined functions:\n");
