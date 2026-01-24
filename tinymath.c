@@ -1204,7 +1204,7 @@ static double parse_program(mp_parser *p)
     return has_value ? last_value : 0.0;
 }
 
-double execute_script(const char *script)
+double exec(const char *script)
 {
     mp_parser p = {{script, 0, strlen(script)}, {0}};
     advance(&p);
@@ -1234,7 +1234,7 @@ int main(void)
 
     printf("Input program:\n%s\n\n", script);
 
-    double result = execute_script(script);
+    double result = exec(script);
 
     printf("\nLast evaluated value: %.17g\n", result);
 
