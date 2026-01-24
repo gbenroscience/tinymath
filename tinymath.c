@@ -1030,6 +1030,7 @@ int main(void)
         "f(2,5);"
         "diff(sin(x^2-3*x-2), x);"
         "diff(diff(sin(x), x), x);"
+        "diff(diff(diff(sin(x), x), x), x);"
         "diff(sin(x), x, pi);";
 
     printf("Input program:\n%s\n\n", script);
