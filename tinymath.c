@@ -45,6 +45,25 @@ static int n_vars = 0;
 /* Partial symbolic mode - ignores numeric bindings, treats identifiers symbolically */
 static int symbolic_mode = 0;
 
+/* Trigonometric mode */
+typedef enum
+{
+    MODE_RAD,
+    MODE_DEG,
+    MODE_GRAD
+} trig_mode_t;
+static trig_mode_t trig_mode = MODE_RAD;
+static const double PI = 3.14159265358979323846;
+
+static double to_radians(double angle)
+{
+    if (trig_mode == MODE_DEG)
+        return angle * PI / 180.0;
+    if (trig_mode == MODE_GRAD)
+        return angle * PI / 200.0;
+    return angle;
+}
+
 /* ---------------- Lexer ---------------- */
 typedef enum
 {
@@ -569,15 +588,18 @@ static int double_cmp(const void *aa, const void *bb)
 {
     const double *a = (const double *)aa;
     const double *b = (const double *)bb;
-    if (*a < *b) return -1;
-    if (*a > *b) return 1;
+    if (*a < *b)
+        return -1;
+    if (*a > *b)
+        return 1;
     return 0;
 }
 
 /* ---------------- Statistical functions (variable arity) ---------------- */
 static double call_stat(const char *name, double *args, int n_args)
 {
-    if (n_args <= 0) return NAN;
+    if (n_args <= 0)
+        return NAN;
 
     double min_val = args[0];
     double max_val = args[0];
@@ -591,8 +613,10 @@ static double call_stat(const char *name, double *args, int n_args)
         sum += v;
         prod *= v;
         sum_sq += v * v;
-        if (v < min_val) min_val = v;
-        if (v > max_val) max_val = v;
+        if (v < min_val)
+            min_val = v;
+        if (v > max_val)
+            max_val = v;
     }
 
     double mean = sum / n_args;
@@ -603,19 +627,20 @@ static double call_stat(const char *name, double *args, int n_args)
         double d = args[i] - mean;
         variance += d * d;
     }
-    variance /= n_args;  // population variance
+    variance /= n_args; // population variance
 
     double sd_val = sqrt(variance);
 
     /* Sorted copy for median / mode */
     double *sorted = (double *)malloc(n_args * sizeof(double));
-    if (!sorted) return NAN;
+    if (!sorted)
+        return NAN;
     memcpy(sorted, args, n_args * sizeof(double));
     qsort(sorted, n_args, sizeof(double), double_cmp);
 
     double median = (n_args % 2 == 1)
-        ? sorted[n_args / 2]
-        : (sorted[n_args / 2 - 1] + sorted[n_args / 2]) / 2.0;
+                        ? sorted[n_args / 2]
+                        : (sorted[n_args / 2 - 1] + sorted[n_args / 2]) / 2.0;
 
     /* Simple mode: longest run of exact equals (returns smallest if tie) */
     double mode_val = sorted[0];
@@ -640,31 +665,45 @@ static double call_stat(const char *name, double *args, int n_args)
 
     free(sorted);
 
-    if (strcmp(name, "sum") == 0) return sum;
-    if (strcmp(name, "prod") == 0) return prod;
-    if (strcmp(name, "avg") == 0) return mean;
-    if (strcmp(name, "med") == 0) return median;
-    if (strcmp(name, "mode") == 0) return mode_val;
-    if (strcmp(name, "rng") == 0) return max_val - min_val;
-    if (strcmp(name, "sd") == 0) return sd_val;
-    if (strcmp(name, "var") == 0) return variance;
-    if (strcmp(name, "rms") == 0) return sqrt(sum_sq / n_args);
-    if (strcmp(name, "mrng") == 0) return (min_val + max_val) / 2.0;
-    if (strcmp(name, "max") == 0) return max_val;
-    if (strcmp(name, "min") == 0) return min_val;
-    if (strcmp(name, "std_err") == 0) return sd_val / sqrt((double)n_args);
+    if (strcmp(name, "sum") == 0)
+        return sum;
+    if (strcmp(name, "prod") == 0)
+        return prod;
+    if (strcmp(name, "avg") == 0)
+        return mean;
+    if (strcmp(name, "med") == 0)
+        return median;
+    if (strcmp(name, "mode") == 0)
+        return mode_val;
+    if (strcmp(name, "rng") == 0)
+        return max_val - min_val;
+    if (strcmp(name, "sd") == 0)
+        return sd_val;
+    if (strcmp(name, "var") == 0)
+        return variance;
+    if (strcmp(name, "rms") == 0)
+        return sqrt(sum_sq / n_args);
+    if (strcmp(name, "mrng") == 0)
+        return (min_val + max_val) / 2.0;
+    if (strcmp(name, "max") == 0)
+        return max_val;
+    if (strcmp(name, "min") == 0)
+        return min_val;
+    if (strcmp(name, "std_err") == 0)
+        return sd_val / sqrt((double)n_args);
 
     return NAN;
 }
 
+/* ---------------- Built-in functions ---------------- */
 static double call_builtin(const char *name, double *args, int n)
 {
     if (strcmp(name, "sin") == 0 && n == 1)
-        return sin(args[0]);
+        return sin(to_radians(args[0]));
     if (strcmp(name, "cos") == 0 && n == 1)
-        return cos(args[0]);
+        return cos(to_radians(args[0]));
     if (strcmp(name, "tan") == 0 && n == 1)
-        return tan(args[0]);
+        return tan(to_radians(args[0]));
     if (strcmp(name, "sqrt") == 0 && n == 1)
         return sqrt(args[0]);
     if (strcmp(name, "log") == 0 && n == 1)
@@ -724,6 +763,7 @@ static mp_result parse_primary(mp_parser *p)
         snprintf(name, sizeof(name), "%s", p->cur.ident);
         advance(p);
 
+        /* Special diff(...) */
         if (strcmp(name, "diff") == 0 && accept(p, TK_LPAREN))
         {
             symbolic_mode = 1;
@@ -733,16 +773,14 @@ static mp_result parse_primary(mp_parser *p)
             if (!accept(p, TK_COMMA))
             {
                 fprintf(stderr, "Expected ',' in diff()\n");
-                if (inner.type == RES_STR)
-                    free(inner.str);
+                if (inner.type == RES_STR) free(inner.str);
                 return make_num(NAN);
             }
 
             if (p->cur.kind != TK_IDENT)
             {
                 fprintf(stderr, "Expected variable name after ',' in diff()\n");
-                if (inner.type == RES_STR)
-                    free(inner.str);
+                if (inner.type == RES_STR) free(inner.str);
                 return make_num(NAN);
             }
             char var[64];
@@ -751,32 +789,27 @@ static mp_result parse_primary(mp_parser *p)
 
             if (accept(p, TK_COMMA))
             {
-                /* Evaluate derivative at point */
+                /* numeric evaluation at point */
                 mp_result point = parse_expr(p);
                 if (!accept(p, TK_RPAREN))
                 {
                     fprintf(stderr, "Expected ')' in diff()\n");
-                    if (inner.type == RES_STR)
-                        free(inner.str);
-                    if (point.type == RES_STR)
-                        free(point.str);
+                    if (inner.type == RES_STR) free(inner.str);
+                    if (point.type == RES_STR) free(point.str);
                     return make_num(NAN);
                 }
                 if (point.type != RES_NUM)
                 {
                     fprintf(stderr, "Evaluation point must be numeric\n");
-                    if (inner.type == RES_STR)
-                        free(inner.str);
-                    if (point.type == RES_STR)
-                        free(point.str);
+                    if (inner.type == RES_STR) free(inner.str);
+                    if (point.type == RES_STR) free(point.str);
                     return make_num(NAN);
                 }
 
                 char *expr_str = (inner.type == RES_NUM) ? double_to_string(inner.num) : strdup(inner.str);
                 char *deriv_str = diff_expr(expr_str, var);
                 free(expr_str);
-                if (inner.type == RES_STR)
-                    free(inner.str);
+                if (inner.type == RES_STR) free(inner.str);
 
                 double old_val = 0.0;
                 int had_var = lookup_var(var, &old_val);
@@ -786,33 +819,31 @@ static mp_result parse_primary(mp_parser *p)
                 advance(&sub);
                 mp_result result = parse_expr(&sub);
 
-                if (had_var)
-                    set_var(var, old_val);
+                if (had_var) set_var(var, old_val);
 
                 free(deriv_str);
                 return result;
             }
             else
             {
-                /* Symbolic derivative */
+                /* symbolic */
                 if (!accept(p, TK_RPAREN))
                 {
                     fprintf(stderr, "Expected ')' in diff()\n");
-                    if (inner.type == RES_STR)
-                        free(inner.str);
+                    if (inner.type == RES_STR) free(inner.str);
                     return make_num(NAN);
                 }
 
                 char *expr_str = (inner.type == RES_NUM) ? double_to_string(inner.num) : strdup(inner.str);
                 char *deriv_str = diff_expr(expr_str, var);
                 free(expr_str);
-                if (inner.type == RES_STR)
-                    free(inner.str);
+                if (inner.type == RES_STR) free(inner.str);
 
                 return make_str(deriv_str);
             }
         }
 
+        /* Function call */
         if (accept(p, TK_LPAREN))
         {
             mp_result args[32];
@@ -832,9 +863,40 @@ static mp_result parse_primary(mp_parser *p)
 
             int all_numeric = 1;
             for (int i = 0; i < n_args; i++)
-                if (args[i].type != RES_NUM)
-                    all_numeric = 0;
+                if (args[i].type != RES_NUM) all_numeric = 0;
 
+            /* ----- Trig mode functions (zero-arg) ----- */
+            if (n_args == 0 && all_numeric)
+            {
+                if (strcmp(name, "DEG") == 0)
+                {
+                    trig_mode = MODE_DEG;
+                    printf("Trigonometric mode set to Degrees\n");
+                    return make_num(NAN); // suppress "=> NaN"
+                }
+                if (strcmp(name, "RAD") == 0)
+                {
+                    trig_mode = MODE_RAD;
+                    printf("Trigonometric mode set to Radians\n");
+                    return make_num(NAN);
+                }
+                if (strcmp(name, "GRAD") == 0)
+                {
+                    trig_mode = MODE_GRAD;
+                    printf("Trigonometric mode set to Gradians\n");
+                    return make_num(NAN);
+                }
+                if (strcmp(name, "MODE") == 0)
+                {
+                    const char *mstr = (trig_mode == MODE_DEG) ? "Degrees"
+                                     : (trig_mode == MODE_GRAD) ? "Gradians"
+                                     : "Radians";
+                    printf("Current trigonometric mode: %s\n", mstr);
+                    return make_num(NAN);
+                }
+            }
+
+            /* Normal function handling */
             char *arg_strs[32];
             for (int i = 0; i < n_args; i++)
                 arg_strs[i] = (args[i].type == RES_NUM) ? double_to_string(args[i].num) : strdup(args[i].str);
@@ -845,64 +907,44 @@ static mp_result parse_primary(mp_parser *p)
                 if (!all_numeric)
                 {
                     fprintf(stderr, "Symbolic arguments not supported for user function %s\n", name);
-                    /* cleanup */
-                    for (int i = 0; i < n_args; i++)
-                    {
-                        free(arg_strs[i]);
-                        if (args[i].type == RES_STR)
-                            free(args[i].str);
-                    }
+                    for (int i = 0; i < n_args; i++) { free(arg_strs[i]); if (args[i].type == RES_STR) free(args[i].str); }
                     return make_num(NAN);
                 }
                 double num_args[32];
-                for (int i = 0; i < n_args; i++)
-                    num_args[i] = args[i].num;
+                for (int i = 0; i < n_args; i++) num_args[i] = args[i].num;
                 mp_result res = call_user_func(uf, num_args, n_args);
-                for (int i = 0; i < n_args; i++)
-                    free(arg_strs[i]);
+                for (int i = 0; i < n_args; i++) free(arg_strs[i]);
                 return res;
             }
 
-            /* Numeric evaluation: try fixed-arity builtins then stats */
             if (all_numeric)
             {
                 double num_args[32];
-                for (int i = 0; i < n_args; i++)
-                    num_args[i] = args[i].num;
+                for (int i = 0; i < n_args; i++) num_args[i] = args[i].num;
 
                 double val = call_builtin(name, num_args, n_args);
                 if (isnan(val))
                     val = call_stat(name, num_args, n_args);
 
-                for (int i = 0; i < n_args; i++)
-                    free(arg_strs[i]);
+                for (int i = 0; i < n_args; i++) free(arg_strs[i]);
 
                 if (!isnan(val))
                     return make_num(val);
             }
 
-            /* Symbolic fallback for unknown functions (including stats with symbolic args) */
+            /* Symbolic fallback */
             size_t len = strlen(name) + 3;
             for (int i = 0; i < n_args; i++)
                 len += strlen(arg_strs[i]) + (i > 0 ? 2 : 0);
-
             char *combined = malloc(len);
             snprintf(combined, len, "%s(", name);
             for (int i = 0; i < n_args; i++)
             {
-                if (i > 0)
-                    strcat(combined, ", ");
+                if (i > 0) strcat(combined, ", ");
                 strcat(combined, arg_strs[i]);
             }
             strcat(combined, ")");
-
-            for (int i = 0; i < n_args; i++)
-            {
-                free(arg_strs[i]);
-                if (args[i].type == RES_STR)
-                    free(args[i].str);
-            }
-
+            for (int i = 0; i < n_args; i++) { free(arg_strs[i]); if (args[i].type == RES_STR) free(args[i].str); }
             return make_str(combined);
         }
 
@@ -917,6 +959,7 @@ static mp_result parse_primary(mp_parser *p)
         fprintf(stderr, "Unknown variable: %s\n", name);
         return make_num(NAN);
     }
+
 
     /* ... rest of primary (parens, unary -, +) unchanged ... */
     if (accept(p, TK_LPAREN))
@@ -1221,6 +1264,13 @@ int main(void)
         "f(20,5);"
         "pi=3.14159;"
         "sin(pi/2);"
+        "DEG();"
+        "sin(21);"
+        "RAD();"
+        "sin(21);"
+        "GRAD();"
+        "sin(21);"
+        "MODE();"
         "f(2,5);"
         "sum(3,5,7,9,sin(pi/2),12);"
         "4%3;"
@@ -1233,10 +1283,7 @@ int main(void)
         "diff(sin(x), x, pi);";
 
     printf("Input program:\n%s\n\n", script);
-
     double result = exec(script);
-
     printf("\nLast evaluated value: %.17g\n", result);
-
     return 0;
 }
