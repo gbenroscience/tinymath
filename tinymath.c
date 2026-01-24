@@ -55,6 +55,7 @@ typedef enum
     TK_MINUS,
     TK_STAR,
     TK_SLASH,
+    TK_PERCENT, // new: % operator
     TK_CARET,
     TK_LPAREN,
     TK_RPAREN,
@@ -170,6 +171,9 @@ static mp_token next_token(mp_lexer *lx)
     case '/':
         t.kind = TK_SLASH;
         break;
+    case '%':
+        t.kind = TK_PERCENT;
+        break; // new: % operator
     case '^':
         t.kind = TK_CARET;
         break;
@@ -223,6 +227,8 @@ static mp_result add(mp_result a, mp_result b);
 static mp_result sub(mp_result a, mp_result b);
 static mp_result mul(mp_result a, mp_result b);
 static mp_result divide(mp_result a, mp_result b);
+static mp_result mod_result(mp_result a, mp_result b); // new: remainder
+
 /* ------------------ Helpers ------------------ */
 static char *double_to_string(double v)
 {
@@ -260,13 +266,15 @@ static mp_result add(mp_result a, mp_result b)
     char *sa = (a.type == RES_STR) ? strdup(a.str) : double_to_string(a.num);
     char *sb = (b.type == RES_STR) ? strdup(b.str) : double_to_string(b.num);
 
-    if (a.type == RES_STR) {
+    if (a.type == RES_STR)
+    {
         char *tmp = sa;
         sa = malloc(strlen(tmp) + 3);
         sprintf(sa, "(%s)", tmp);
         free(tmp);
     }
-    if (b.type == RES_STR) {
+    if (b.type == RES_STR)
+    {
         char *tmp = sb;
         sb = malloc(strlen(tmp) + 3);
         sprintf(sb, "(%s)", tmp);
@@ -287,13 +295,15 @@ static mp_result sub(mp_result a, mp_result b)
     char *sa = (a.type == RES_STR) ? strdup(a.str) : double_to_string(a.num);
     char *sb = (b.type == RES_STR) ? strdup(b.str) : double_to_string(b.num);
 
-    if (a.type == RES_STR) {
+    if (a.type == RES_STR)
+    {
         char *tmp = sa;
         sa = malloc(strlen(tmp) + 3);
         sprintf(sa, "(%s)", tmp);
         free(tmp);
     }
-    if (b.type == RES_STR) {
+    if (b.type == RES_STR)
+    {
         char *tmp = sb;
         sb = malloc(strlen(tmp) + 3);
         sprintf(sb, "(%s)", tmp);
@@ -314,13 +324,15 @@ static mp_result mul(mp_result a, mp_result b)
     char *sa = (a.type == RES_STR) ? strdup(a.str) : double_to_string(a.num);
     char *sb = (b.type == RES_STR) ? strdup(b.str) : double_to_string(b.num);
 
-    if (a.type == RES_STR) {
+    if (a.type == RES_STR)
+    {
         char *tmp = sa;
         sa = malloc(strlen(tmp) + 3);
         sprintf(sa, "(%s)", tmp);
         free(tmp);
     }
-    if (b.type == RES_STR) {
+    if (b.type == RES_STR)
+    {
         char *tmp = sb;
         sb = malloc(strlen(tmp) + 3);
         sprintf(sb, "(%s)", tmp);
@@ -341,13 +353,15 @@ static mp_result divide(mp_result a, mp_result b)
     char *sa = (a.type == RES_STR) ? strdup(a.str) : double_to_string(a.num);
     char *sb = (b.type == RES_STR) ? strdup(b.str) : double_to_string(b.num);
 
-    if (a.type == RES_STR) {
+    if (a.type == RES_STR)
+    {
         char *tmp = sa;
         sa = malloc(strlen(tmp) + 3);
         sprintf(sa, "(%s)", tmp);
         free(tmp);
     }
-    if (b.type == RES_STR) {
+    if (b.type == RES_STR)
+    {
         char *tmp = sb;
         sb = malloc(strlen(tmp) + 3);
         sprintf(sb, "(%s)", tmp);
@@ -360,6 +374,34 @@ static mp_result divide(mp_result a, mp_result b)
     return make_str(combined);
 }
 
+static mp_result mod_result(mp_result a, mp_result b) // new: remainder
+{
+    if (a.type == RES_NUM && b.type == RES_NUM)
+        return make_num(fmod(a.num, b.num));
+
+    char *sa = (a.type == RES_STR) ? strdup(a.str) : double_to_string(a.num);
+    char *sb = (b.type == RES_STR) ? strdup(b.str) : double_to_string(b.num);
+
+    if (a.type == RES_STR)
+    {
+        char *tmp = sa;
+        sa = malloc(strlen(tmp) + 3);
+        sprintf(sa, "(%s)", tmp);
+        free(tmp);
+    }
+    if (b.type == RES_STR)
+    {
+        char *tmp = sb;
+        sb = malloc(strlen(tmp) + 3);
+        sprintf(sb, "(%s)", tmp);
+        free(tmp);
+    }
+
+    char *combined = concat3(sa, " % ", sb);
+    free(sa);
+    free(sb);
+    return make_str(combined);
+}
 static mp_result pow_result(mp_result a, mp_result b)
 {
     if (a.type == RES_NUM && b.type == RES_NUM)
@@ -368,13 +410,15 @@ static mp_result pow_result(mp_result a, mp_result b)
     char *sa = (a.type == RES_STR) ? strdup(a.str) : double_to_string(a.num);
     char *sb = (b.type == RES_STR) ? strdup(b.str) : double_to_string(b.num);
 
-    if (a.type == RES_STR) {
+    if (a.type == RES_STR)
+    {
         char *tmp = sa;
         sa = malloc(strlen(tmp) + 3);
         sprintf(sa, "(%s)", tmp);
         free(tmp);
     }
-    if (b.type == RES_STR) {
+    if (b.type == RES_STR)
+    {
         char *tmp = sb;
         sb = malloc(strlen(tmp) + 3);
         sprintf(sb, "(%s)", tmp);
@@ -395,7 +439,9 @@ static mp_result parse_factor(mp_parser *p)
     {
         mp_result rhs = parse_factor(p);
         v = pow_result(v, rhs);
-        if (v.type == RES_STR && v.str) { /* free args if needed - handled in pow_result */ }
+        if (v.type == RES_STR && v.str)
+        { /* free args if needed - handled in pow_result */
+        }
     }
     return v;
 }
@@ -403,12 +449,17 @@ static mp_result parse_factor(mp_parser *p)
 static mp_result parse_term(mp_parser *p)
 {
     mp_result v = parse_factor(p);
-    while (p->cur.kind == TK_STAR || p->cur.kind == TK_SLASH)
+    while (p->cur.kind == TK_STAR || p->cur.kind == TK_SLASH || p->cur.kind == TK_PERCENT)
     {
         mp_tok_kind op = p->cur.kind;
         advance(p);
         mp_result rhs = parse_factor(p);
-        v = (op == TK_STAR) ? mul(v, rhs) : divide(v, rhs);
+        if (op == TK_STAR)
+            v = mul(v, rhs);
+        else if (op == TK_SLASH)
+            v = divide(v, rhs);
+        else
+            v = mod_result(v, rhs); // new
     }
     return v;
 }
@@ -513,16 +564,117 @@ mp_func *lookup_func(const char *name)
     return NULL;
 }
 
+/* ---------------- Sorting helper ---------------- */
+static int double_cmp(const void *aa, const void *bb)
+{
+    const double *a = (const double *)aa;
+    const double *b = (const double *)bb;
+    if (*a < *b) return -1;
+    if (*a > *b) return 1;
+    return 0;
+}
+
+/* ---------------- Statistical functions (variable arity) ---------------- */
+static double call_stat(const char *name, double *args, int n_args)
+{
+    if (n_args <= 0) return NAN;
+
+    double min_val = args[0];
+    double max_val = args[0];
+    double sum = 0.0;
+    double prod = 1.0;
+    double sum_sq = 0.0;
+
+    for (int i = 0; i < n_args; i++)
+    {
+        double v = args[i];
+        sum += v;
+        prod *= v;
+        sum_sq += v * v;
+        if (v < min_val) min_val = v;
+        if (v > max_val) max_val = v;
+    }
+
+    double mean = sum / n_args;
+
+    double variance = 0.0;
+    for (int i = 0; i < n_args; i++)
+    {
+        double d = args[i] - mean;
+        variance += d * d;
+    }
+    variance /= n_args;  // population variance
+
+    double sd_val = sqrt(variance);
+
+    /* Sorted copy for median / mode */
+    double *sorted = (double *)malloc(n_args * sizeof(double));
+    if (!sorted) return NAN;
+    memcpy(sorted, args, n_args * sizeof(double));
+    qsort(sorted, n_args, sizeof(double), double_cmp);
+
+    double median = (n_args % 2 == 1)
+        ? sorted[n_args / 2]
+        : (sorted[n_args / 2 - 1] + sorted[n_args / 2]) / 2.0;
+
+    /* Simple mode: longest run of exact equals (returns smallest if tie) */
+    double mode_val = sorted[0];
+    int max_count = 1;
+    int cur_count = 1;
+    for (int i = 1; i < n_args; i++)
+    {
+        if (sorted[i] == sorted[i - 1])
+            cur_count++;
+        else
+        {
+            if (cur_count > max_count)
+            {
+                max_count = cur_count;
+                mode_val = sorted[i - 1];
+            }
+            cur_count = 1;
+        }
+    }
+    if (cur_count > max_count)
+        mode_val = sorted[n_args - 1];
+
+    free(sorted);
+
+    if (strcmp(name, "sum") == 0) return sum;
+    if (strcmp(name, "prod") == 0) return prod;
+    if (strcmp(name, "avg") == 0) return mean;
+    if (strcmp(name, "med") == 0) return median;
+    if (strcmp(name, "mode") == 0) return mode_val;
+    if (strcmp(name, "rng") == 0) return max_val - min_val;
+    if (strcmp(name, "sd") == 0) return sd_val;
+    if (strcmp(name, "var") == 0) return variance;
+    if (strcmp(name, "rms") == 0) return sqrt(sum_sq / n_args);
+    if (strcmp(name, "mrng") == 0) return (min_val + max_val) / 2.0;
+    if (strcmp(name, "max") == 0) return max_val;
+    if (strcmp(name, "min") == 0) return min_val;
+    if (strcmp(name, "std_err") == 0) return sd_val / sqrt((double)n_args);
+
+    return NAN;
+}
+
 static double call_builtin(const char *name, double *args, int n)
 {
-    if (strcmp(name, "sin") == 0 && n == 1) return sin(args[0]);
-    if (strcmp(name, "cos") == 0 && n == 1) return cos(args[0]);
-    if (strcmp(name, "tan") == 0 && n == 1) return tan(args[0]);
-    if (strcmp(name, "sqrt") == 0 && n == 1) return sqrt(args[0]);
-    if (strcmp(name, "log") == 0 && n == 1) return log(args[0]);
-    if (strcmp(name, "exp") == 0 && n == 1) return exp(args[0]);
-    if (strcmp(name, "abs") == 0 && n == 1) return fabs(args[0]);
-    if (strcmp(name, "pow") == 0 && n == 2) return pow(args[0], args[1]);
+    if (strcmp(name, "sin") == 0 && n == 1)
+        return sin(args[0]);
+    if (strcmp(name, "cos") == 0 && n == 1)
+        return cos(args[0]);
+    if (strcmp(name, "tan") == 0 && n == 1)
+        return tan(args[0]);
+    if (strcmp(name, "sqrt") == 0 && n == 1)
+        return sqrt(args[0]);
+    if (strcmp(name, "log") == 0 && n == 1)
+        return log(args[0]);
+    if (strcmp(name, "exp") == 0 && n == 1)
+        return exp(args[0]);
+    if (strcmp(name, "abs") == 0 && n == 1)
+        return fabs(args[0]);
+    if (strcmp(name, "pow") == 0 && n == 2)
+        return pow(args[0], args[1]);
     return NAN;
 }
 
@@ -556,6 +708,7 @@ static mp_result call_user_func(mp_func *f, double *args, int n)
 }
 
 /* ---------------- Primary ---------------- */
+/* Primary expression - main change in function call handling */
 static mp_result parse_primary(mp_parser *p)
 {
     if (p->cur.kind == TK_NUM)
@@ -571,7 +724,6 @@ static mp_result parse_primary(mp_parser *p)
         snprintf(name, sizeof(name), "%s", p->cur.ident);
         advance(p);
 
-        /* Special diff(...) */
         if (strcmp(name, "diff") == 0 && accept(p, TK_LPAREN))
         {
             symbolic_mode = 1;
@@ -581,14 +733,16 @@ static mp_result parse_primary(mp_parser *p)
             if (!accept(p, TK_COMMA))
             {
                 fprintf(stderr, "Expected ',' in diff()\n");
-                if (inner.type == RES_STR) free(inner.str);
+                if (inner.type == RES_STR)
+                    free(inner.str);
                 return make_num(NAN);
             }
 
             if (p->cur.kind != TK_IDENT)
             {
                 fprintf(stderr, "Expected variable name after ',' in diff()\n");
-                if (inner.type == RES_STR) free(inner.str);
+                if (inner.type == RES_STR)
+                    free(inner.str);
                 return make_num(NAN);
             }
             char var[64];
@@ -602,22 +756,27 @@ static mp_result parse_primary(mp_parser *p)
                 if (!accept(p, TK_RPAREN))
                 {
                     fprintf(stderr, "Expected ')' in diff()\n");
-                    if (inner.type == RES_STR) free(inner.str);
-                    if (point.type == RES_STR) free(point.str);
+                    if (inner.type == RES_STR)
+                        free(inner.str);
+                    if (point.type == RES_STR)
+                        free(point.str);
                     return make_num(NAN);
                 }
                 if (point.type != RES_NUM)
                 {
                     fprintf(stderr, "Evaluation point must be numeric\n");
-                    if (inner.type == RES_STR) free(inner.str);
-                    if (point.type == RES_STR) free(point.str);
+                    if (inner.type == RES_STR)
+                        free(inner.str);
+                    if (point.type == RES_STR)
+                        free(point.str);
                     return make_num(NAN);
                 }
 
                 char *expr_str = (inner.type == RES_NUM) ? double_to_string(inner.num) : strdup(inner.str);
                 char *deriv_str = diff_expr(expr_str, var);
                 free(expr_str);
-                if (inner.type == RES_STR) free(inner.str);
+                if (inner.type == RES_STR)
+                    free(inner.str);
 
                 double old_val = 0.0;
                 int had_var = lookup_var(var, &old_val);
@@ -639,20 +798,21 @@ static mp_result parse_primary(mp_parser *p)
                 if (!accept(p, TK_RPAREN))
                 {
                     fprintf(stderr, "Expected ')' in diff()\n");
-                    if (inner.type == RES_STR) free(inner.str);
+                    if (inner.type == RES_STR)
+                        free(inner.str);
                     return make_num(NAN);
                 }
 
                 char *expr_str = (inner.type == RES_NUM) ? double_to_string(inner.num) : strdup(inner.str);
                 char *deriv_str = diff_expr(expr_str, var);
                 free(expr_str);
-                if (inner.type == RES_STR) free(inner.str);
+                if (inner.type == RES_STR)
+                    free(inner.str);
 
                 return make_str(deriv_str);
             }
         }
 
-        /* Function call */
         if (accept(p, TK_LPAREN))
         {
             mp_result args[32];
@@ -672,7 +832,8 @@ static mp_result parse_primary(mp_parser *p)
 
             int all_numeric = 1;
             for (int i = 0; i < n_args; i++)
-                if (args[i].type != RES_NUM) all_numeric = 0;
+                if (args[i].type != RES_NUM)
+                    all_numeric = 0;
 
             char *arg_strs[32];
             for (int i = 0; i < n_args; i++)
@@ -684,45 +845,68 @@ static mp_result parse_primary(mp_parser *p)
                 if (!all_numeric)
                 {
                     fprintf(stderr, "Symbolic arguments not supported for user function %s\n", name);
-                    for (int i = 0; i < n_args; i++) free(arg_strs[i]);
-                    for (int i = 0; i < n_args; i++) if (args[i].type == RES_STR) free(args[i].str);
+                    /* cleanup */
+                    for (int i = 0; i < n_args; i++)
+                    {
+                        free(arg_strs[i]);
+                        if (args[i].type == RES_STR)
+                            free(args[i].str);
+                    }
                     return make_num(NAN);
                 }
                 double num_args[32];
-                for (int i = 0; i < n_args; i++) num_args[i] = args[i].num;
+                for (int i = 0; i < n_args; i++)
+                    num_args[i] = args[i].num;
                 mp_result res = call_user_func(uf, num_args, n_args);
-                for (int i = 0; i < n_args; i++) free(arg_strs[i]);
+                for (int i = 0; i < n_args; i++)
+                    free(arg_strs[i]);
                 return res;
             }
 
+            /* Numeric evaluation: try fixed-arity builtins then stats */
             if (all_numeric)
             {
                 double num_args[32];
-                for (int i = 0; i < n_args; i++) num_args[i] = args[i].num;
+                for (int i = 0; i < n_args; i++)
+                    num_args[i] = args[i].num;
+
                 double val = call_builtin(name, num_args, n_args);
-                for (int i = 0; i < n_args; i++) free(arg_strs[i]);
+                if (isnan(val))
+                    val = call_stat(name, num_args, n_args);
+
+                for (int i = 0; i < n_args; i++)
+                    free(arg_strs[i]);
+
                 if (!isnan(val))
                     return make_num(val);
             }
 
-            /* Symbolic unknown function call */
+            /* Symbolic fallback for unknown functions (including stats with symbolic args) */
             size_t len = strlen(name) + 3;
             for (int i = 0; i < n_args; i++)
                 len += strlen(arg_strs[i]) + (i > 0 ? 2 : 0);
+
             char *combined = malloc(len);
             snprintf(combined, len, "%s(", name);
             for (int i = 0; i < n_args; i++)
             {
-                if (i > 0) strcat(combined, ", ");
+                if (i > 0)
+                    strcat(combined, ", ");
                 strcat(combined, arg_strs[i]);
             }
             strcat(combined, ")");
-            for (int i = 0; i < n_args; i++) free(arg_strs[i]);
-            for (int i = 0; i < n_args; i++) if (args[i].type == RES_STR) free(args[i].str);
+
+            for (int i = 0; i < n_args; i++)
+            {
+                free(arg_strs[i]);
+                if (args[i].type == RES_STR)
+                    free(args[i].str);
+            }
+
             return make_str(combined);
         }
 
-        /* Plain identifier - symbolic mode takes priority */
+        /* Plain identifier */
         if (symbolic_mode)
             return make_str(name);
 
@@ -734,6 +918,7 @@ static mp_result parse_primary(mp_parser *p)
         return make_num(NAN);
     }
 
+    /* ... rest of primary (parens, unary -, +) unchanged ... */
     if (accept(p, TK_LPAREN))
     {
         mp_result r = parse_expr(p);
@@ -746,9 +931,7 @@ static mp_result parse_primary(mp_parser *p)
     {
         mp_result r = parse_primary(p);
         if (r.type == RES_NUM)
-        {
             r.num = -r.num;
-        }
         else
         {
             char *s = malloc(strlen(r.str) + 3);
@@ -868,7 +1051,8 @@ static StmtResult parse_statement(mp_parser *p)
             {
                 fprintf(stderr, "Assignment requires a numeric value (got symbolic).\n");
             }
-            if (val.type == RES_STR) free(val.str);
+            if (val.type == RES_STR)
+                free(val.str);
             return res;
         }
 
@@ -886,8 +1070,10 @@ static StmtResult parse_statement(mp_parser *p)
 
             while (paren_depth > 0 && p->cur.kind != TK_END)
             {
-                if (p->cur.kind == TK_LPAREN) paren_depth++;
-                if (p->cur.kind == TK_RPAREN) paren_depth--;
+                if (p->cur.kind == TK_LPAREN)
+                    paren_depth++;
+                if (p->cur.kind == TK_RPAREN)
+                    paren_depth--;
                 advance(p);
             }
 
@@ -996,7 +1182,8 @@ static double parse_program(mp_parser *p)
 
         size_t len = stmt_end - stmt_start;
         char stmt[256];
-        if (len >= sizeof(stmt)) len = sizeof(stmt) - 1;
+        if (len >= sizeof(stmt))
+            len = sizeof(stmt) - 1;
         memcpy(stmt, p->lx.input + stmt_start, len);
         stmt[len] = '\0';
 
@@ -1028,6 +1215,11 @@ int main(void)
         "pi=3.14159;"
         "sin(pi/2);"
         "f(2,5);"
+        "sum(3,5,7,9,sin(pi/2),12);"
+        "4%3;"
+        "10%3;"
+        "(13%9)+2^(5%3);"
+        "-10%3;"
         "diff(sin(x^2-3*x-2), x);"
         "diff(diff(sin(x), x), x);"
         "diff(diff(diff(sin(x), x), x), x);"
