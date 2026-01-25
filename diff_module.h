@@ -322,8 +322,8 @@ static char* diff_expr(const char* expr, const char* var) {
 static int diff_func(const char* src_name, const char* wrt, const char* dst_name) {
     // Prototypes (usually these should be in a header)
     mp_func* lookup_func(const char*);   
-    int define_func(const char*, char[][64], int, const char*, size_t);
-
+    int define_func(const char*, const char[][MAX_IDENT_LEN], int, const char*, size_t);
+ 
     mp_func* f = lookup_func(src_name);
     if (!f) { 
         fprintf(stderr, "diff_func: unknown function %s\n", src_name); 

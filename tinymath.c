@@ -443,36 +443,46 @@ static mp_result parse_expr(mp_parser *p)
 static mp_func *funcs = NULL;     /* Pointer to dynamic array of functions */
 static size_t n_funcs = 0;        /* Current number of defined functions */
 static size_t funcs_capacity = 0; /* Current allocated capacity (for realloc growth) */
+ 
 
-int define_func(const char *name, char params[][64], int n_params,
-                       const char *body_start, size_t body_len)
+int define_func(const char *name, const char params[][MAX_IDENT_LEN], int n_params,
+                const char *body_start, size_t body_len)
 {
-    if (n_params > 32)
-    {
+    if (n_params > 32) {
         fprintf(stderr, "Too many parameters (max 32)\n");
         return 0;
     }
-    if (n_funcs >= funcs_capacity)
-    {
+
+    /* Make a copy of the body first */
+    char *body_copy = malloc(body_len + 1);
+    if (!body_copy) {
+        fprintf(stderr, "Memory allocation failed for function body\n");
+        return 0;
+    }
+    memcpy(body_copy, body_start, body_len);
+    body_copy[body_len] = '\0';
+
+    /* Ensure capacity for the funcs array */
+    if (n_funcs >= funcs_capacity) {
         size_t new_cap = funcs_capacity ? funcs_capacity * 2 : 16;
         mp_func *temp = realloc(funcs, new_cap * sizeof(mp_func));
-        if (!temp)
+        if (!temp) {
+            free(body_copy);
+            fprintf(stderr, "Memory allocation failed for function table\n");
             return 0;
+        }
         funcs = temp;
         funcs_capacity = new_cap;
     }
+
+    /* Now append the new function */
     mp_func *f = &funcs[n_funcs++];
     snprintf(f->name, sizeof(f->name), "%s", name);
     f->n_params = n_params;
-    for (int i = 0; i < n_params; i++)
-    {
+    for (int i = 0; i < n_params; i++) {
         snprintf(f->params[i], sizeof(f->params[i]), "%s", params[i]);
     }
-    f->body = malloc(body_len + 1);
-    if (!f->body)
-        return 0;
-    memcpy(f->body, body_start, body_len);
-    f->body[body_len] = '\0';
+    f->body = body_copy;
     return 1;
 }
 mp_func *lookup_func(const char *name)
