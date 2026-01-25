@@ -317,34 +317,40 @@ static char* diff_expr(const char* expr, const char* var) {
     return result;
 }
 
-
-/* Create a derivative function: dst_name(params...) = d/d(wrt) src_name(body) */ 
+/* Create a derivative function: dst_name(params...) = d/d(wrt) src_name(body) */  
 static int diff_func(const char* src_name, const char* wrt, const char* dst_name) {
-    // Prototypes (usually these should be in a header)
-    mp_func* lookup_func(const char*);   
-    int define_func(const char*, const char[][MAX_IDENT_LEN], int, const char*, size_t);
- 
+    /* Use the canonical prototypes from parser_api.h — do not redeclare them here. */
     mp_func* f = lookup_func(src_name);
-    if (!f) { 
-        fprintf(stderr, "diff_func: unknown function %s\n", src_name); 
-        return 0; 
+    if (!f) {
+        fprintf(stderr, "diff_func: unknown function %s\n", src_name);
+        return 0;
     }
 
-    // Symbolic differentiation: returns a new string like "cos(x) * 1"
-    char* body_d = diff_expr(f->body, wrt);
-    if (!body_d) return 0;
-
-    // Copy parameters from the source function
-    char params[MAX_FUNC_PARAMS][MAX_IDENT_LEN]; // Match your params limit
-    for (int i = 0; i < f->n_params; i++) {
-        snprintf(params[i], sizeof(params[i]), "%s", f->params[i]);
+    /* compute derivative string */
+    char *body_d = diff_expr(f->body, wrt);
+    if (!body_d) {
+        fprintf(stderr, "diff_func: diff_expr failed for %s\n", f->body ? f->body : "(null)");
+        return 0;
     }
 
-    // Pass the body and its length
-    int ok = define_func(dst_name, params, f->n_params, body_d, strlen(body_d));
-    
-    free(body_d); // Clean up the string allocated by diff_expr
+    /* copy params into the expected shape */
+    if (f->n_params > MAX_FUNC_PARAMS) {
+        fprintf(stderr, "diff_func: too many params in %s (max %d)\n", src_name, MAX_FUNC_PARAMS);
+        free(body_d);
+        return 0;
+    }
+
+    char params[MAX_FUNC_PARAMS][MAX_IDENT_LEN];
+    for (int i = 0; i < f->n_params; ++i) {
+        snprintf(params[i], MAX_IDENT_LEN, "%s", f->params[i]);
+    }
+
+    size_t blen = strlen(body_d);
+    int ok = define_func(dst_name, params, f->n_params, body_d, blen);
+
+    free(body_d);
     return ok;
 }
+
 
 #endif /* DIFF_MODULE_H */

@@ -97,15 +97,11 @@ static int add_var(const char *name, double value, int is_const)
     n_vars++;
     return 1;
 }
- 
-
- 
 
 int set_const(const char *name, double value)
 {
     return add_var(name, value, 1);
 }
- 
 
 // 2. Adjust add_var to only be used for "NEW" variables
 // (Remove the "redefining" error check from inside add_var if you use it this way)
@@ -215,7 +211,7 @@ static mp_result sub(mp_result a, mp_result b);
 static mp_result mul(mp_result a, mp_result b);
 static mp_result divide(mp_result a, mp_result b);
 static mp_result mod_result(mp_result a, mp_result b); // new: remainder
- 
+
 /* Universal macro for both operators and math functions */
 #define DEFINE_BINOP_EXT(name, opstr, numeric_expr)                               \
     static mp_result name(mp_result a, mp_result b)                               \
@@ -244,19 +240,15 @@ static mp_result mod_result(mp_result a, mp_result b); // new: remainder
         return make_str(combined);                                                \
     }
 
- 
-
 /* Standard Operators */
-DEFINE_BINOP_EXT(add,    " + ", a.num + b.num)
-DEFINE_BINOP_EXT(sub,    " - ", a.num - b.num)
-DEFINE_BINOP_EXT(mul,    " * ", a.num * b.num)
+DEFINE_BINOP_EXT(add, " + ", a.num + b.num)
+DEFINE_BINOP_EXT(sub, " - ", a.num - b.num)
+DEFINE_BINOP_EXT(mul, " * ", a.num *b.num)
 DEFINE_BINOP_EXT(divide, " / ", a.num / b.num)
 
 /* Functional Operators (Now safe to delete the manual ones) */
 DEFINE_BINOP_EXT(mod_result, " % ", fmod(a.num, b.num))
-DEFINE_BINOP_EXT(pow_result, "^",   pow(a.num, b.num))
-
-
+DEFINE_BINOP_EXT(pow_result, "^", pow(a.num, b.num))
 
 static void skip_ws(mp_lexer *lx)
 {
@@ -379,8 +371,6 @@ static mp_token next_token(mp_lexer *lx)
     return t;
 }
 
-
-
 static void advance(mp_parser *p) { p->cur = next_token(&p->lx); }
 static int accept(mp_parser *p, mp_tok_kind k)
 {
@@ -390,8 +380,7 @@ static int accept(mp_parser *p, mp_tok_kind k)
         return 1;
     }
     return 0;
-} 
-
+}
 
 /* ---------------- Parsing ---------------- */
 static mp_result parse_factor(mp_parser *p)
@@ -443,19 +432,20 @@ static mp_result parse_expr(mp_parser *p)
 static mp_func *funcs = NULL;     /* Pointer to dynamic array of functions */
 static size_t n_funcs = 0;        /* Current number of defined functions */
 static size_t funcs_capacity = 0; /* Current allocated capacity (for realloc growth) */
- 
 
 int define_func(const char *name, const char params[][MAX_IDENT_LEN], int n_params,
                 const char *body_start, size_t body_len)
-{ 
-    if (n_params > MAX_FUNC_PARAMS) {
+{
+    if (n_params > MAX_FUNC_PARAMS)
+    {
         fprintf(stderr, "Too many parameters (max %d)\n", MAX_FUNC_PARAMS);
         return 0;
     }
 
     /* Make a copy of the body first */
     char *body_copy = malloc(body_len + 1);
-    if (!body_copy) {
+    if (!body_copy)
+    {
         fprintf(stderr, "Memory allocation failed for function body\n");
         return 0;
     }
@@ -463,10 +453,12 @@ int define_func(const char *name, const char params[][MAX_IDENT_LEN], int n_para
     body_copy[body_len] = '\0';
 
     /* Ensure capacity for the funcs array */
-    if (n_funcs >= funcs_capacity) {
+    if (n_funcs >= funcs_capacity)
+    {
         size_t new_cap = funcs_capacity ? funcs_capacity * 2 : 16;
         mp_func *temp = realloc(funcs, new_cap * sizeof(mp_func));
-        if (!temp) {
+        if (!temp)
+        {
             free(body_copy);
             fprintf(stderr, "Memory allocation failed for function table\n");
             return 0;
@@ -479,10 +471,12 @@ int define_func(const char *name, const char params[][MAX_IDENT_LEN], int n_para
     mp_func *f = &funcs[n_funcs++];
     snprintf(f->name, sizeof(f->name), "%s", name);
     f->n_params = n_params;
-    for (int i = 0; i < n_params; i++) {
+    for (int i = 0; i < n_params; i++)
+    {
         snprintf(f->params[i], sizeof(f->params[i]), "%s", params[i]);
     }
     f->body = body_copy;
+ 
     return 1;
 }
 mp_func *lookup_func(const char *name)
@@ -556,7 +550,7 @@ static double call_stat(const char *name, double *args, int n_args)
     double var_pop = ssd / n_args;
     double var_sam = (n_args > 1) ? ssd / (n_args - 1) : 0.0;
     double std_sam = sqrt(var_sam);
-  
+
     double std_pop = sqrt(var_pop);
 
     if (strcmp(name, "zscore") == 0)
@@ -662,7 +656,7 @@ static double call_builtin(const char *name, double *args, int n)
 }
 static mp_result call_user_func(mp_func *f, double *args, int n)
 {
-   if (n != f->n_params)
+    if (n != f->n_params)
     {
         fprintf(stderr, "Wrong number of arguments for %s (got %d, expected %d)\n",
                 f->name, n, f->n_params);
@@ -679,14 +673,14 @@ static mp_result call_user_func(mp_func *f, double *args, int n)
     // 1. Initialize the sub-parser
     mp_parser sub;
     memset(&sub, 0, sizeof(sub)); // Zero out everything
-    
+
     sub.lx.input = f->body;
     sub.lx.i = 0;
     sub.lx.len = strlen(f->body);
-    
+
     // 2. Priming the pump
     advance(&sub); // This loads the first token from the body into sub.cur
-    
+
     // 3. Parse the expression
     mp_result result = parse_expr(&sub);
 
@@ -965,7 +959,7 @@ static mp_result parse_primary(mp_parser *p)
 
         fprintf(stderr, "Unknown variable: %s\n", name);
         return make_num(NAN);
-    } 
+    }
 
     /* ... rest of primary (parens, unary -, +) unchanged ... */
     if (accept(p, TK_LPAREN))
@@ -999,7 +993,7 @@ static mp_result parse_primary(mp_parser *p)
 }
 
 /* ---------------- Function definition ---------------- */
-/* corrected parse_func_def - uses macros and excludes trailing semicolon */
+/* corrected parse_func_def - uses macros and excludes trailing semicolon */ 
 static int parse_func_def(mp_parser *p, const char *fname)
 {
     if (!accept(p, TK_LPAREN))
@@ -1048,8 +1042,8 @@ static int parse_func_def(mp_parser *p, const char *fname)
         return 0;
     }
 
-    /* capture start index (within input) for zero-copy pass-through */
-    size_t body_start_idx = p->lx.i;
+    /* IMPORTANT: use p->cur.pos (start of current token) as body start */
+    size_t body_start_idx = p->cur.pos;
 
     /* advance until semicolon or end */
     while (p->cur.kind != TK_SEMI && p->cur.kind != TK_END)
@@ -1082,44 +1076,56 @@ typedef struct
     double value;
 } StmtResult;
 
-static StmtResult parse_statement(mp_parser *p) {
+static StmtResult parse_statement(mp_parser *p)
+{
     StmtResult res = {STMT_ERROR, NAN};
 
-    /* Save FULL lexer state: position AND current token */
-    size_t save_i = p->lx.i;
-    mp_token save_cur = p->cur;
-
-    if (p->cur.kind == TK_IDENT) {
+    if (p->cur.kind == TK_IDENT)
+    {
         char name[64];
         snprintf(name, sizeof(name), "%s", p->cur.ident);
 
-        /* Consume the identifier for lookahead */
+        /* Save state before consuming the identifier so we can restore later */
+        size_t save_pre_i = p->lx.i;
+        mp_token save_pre_cur = p->cur;
+
+        /* Consume the identifier; p->cur is now the token after the name */
         advance(p);
 
-        /* Assignment: IDENT = expr */
-        if (p->cur.kind == TK_EQ) {
-            advance(p);  /* consume '=' */
+        /* --- Assignment? (IDENT = expr) --- */
+        if (p->cur.kind == TK_EQ)
+        {
+            advance(p); /* consume '=' */
             mp_result val = parse_expr(p);
-            if (val.type == RES_NUM && !isnan(val.num)) {
-                if (set_var(name, val.num)) {
+            if (val.type == RES_NUM && !isnan(val.num))
+            {
+                if (set_var(name, val.num))
+                {
                     res.kind = STMT_VALUE;
                     res.value = val.num;
                 }
-            } else {
+            }
+            else
+            {
                 fprintf(stderr, "Assignment requires a numeric value.\n");
             }
-            if (val.type == RES_STR) free(val.str);
+            if (val.type == RES_STR)
+                free(val.str);
             return res;
         }
 
-        /* Function definition: IDENT ( ... ) = ... */
-        if (p->cur.kind == TK_LPAREN) {
-            size_t def_save_i = p->lx.i;
-            mp_token def_save_cur = p->cur;
+        /* --- Possible function definition? (IDENT ( ... ) = ...) --- */
+        if (p->cur.kind == TK_LPAREN)
+        {
+            /* Save the state immediately after the identifier (so we can call parse_func_def from that state) */
+            size_t save_after_i = p->lx.i;
+            mp_token save_after_cur = p->cur;
 
+            /* Lookahead to find matching ')' and check for '=' after it */
             int paren_depth = 1;
-            advance(p);  /* consume '(' */
-            while (paren_depth > 0 && p->cur.kind != TK_END) {
+            advance(p); /* consume '(' for lookahead */
+            while (paren_depth > 0 && p->cur.kind != TK_END)
+            {
                 if (p->cur.kind == TK_LPAREN) paren_depth++;
                 if (p->cur.kind == TK_RPAREN) paren_depth--;
                 advance(p);
@@ -1127,26 +1133,28 @@ static StmtResult parse_statement(mp_parser *p) {
 
             int is_definition = (paren_depth == 0 && p->cur.kind == TK_EQ);
 
-            /* Restore after lookahead */
-            p->lx.i = def_save_i;
-            p->cur = def_save_cur;
+            /* Restore to the state immediately after the identifier so parse_func_def can be invoked */
+            p->lx.i = save_after_i;
+            p->cur = save_after_cur;
 
-            if (is_definition) {
-                if (parse_func_def(p, name)) {
+            if (is_definition)
+            {
+                if (parse_func_def(p, name))
+                {
                     res.kind = STMT_DEFINITION;
                     return res;
                 }
                 fprintf(stderr, "Invalid function definition for %s\n", name);
                 return res;
             }
+
+            /* Not a definition — fall through to check other cases / restore below */
         }
 
-        /* df(f,x) at statement level - place before rewind if you use it */
-        /* (your df block here, using 'name' and checking p->cur.kind == TK_LPAREN) */
-        	
+        /* --- df(src, wrt) at statement level (create derivative function) --- */
+        /* p->cur is still the token after the identifier because we haven't restored pre-state yet */
         if (strcmp(name, "df") == 0 && accept(p, TK_LPAREN))
         {
-            /* ... unchanged ... */
             if (p->cur.kind == TK_IDENT)
             {
                 char src[64];
@@ -1176,33 +1184,39 @@ static StmtResult parse_statement(mp_parser *p) {
                     }
                 }
             }
+            /* If df(...) didn't succeed, fall through to restore and parse normally */
         }
 
-        /* Not assignment or definition → plain expression (call, variable, etc.) */
-        /* FULL RESTORE: position + current token */
-        p->lx.i = save_i;
-        p->cur = save_cur;
+        /* Not assignment/definition/df -> restore to pre-identifier state so expression parsing starts with the IDENT token */
+        p->lx.i = save_pre_i;
+        p->cur = save_pre_cur;
     }
 
     /* Parse the expression (now starts correctly with IDENT or other token) */
     mp_result v = parse_expr(p);
 
-    if (v.type == RES_NUM && !isnan(v.num)) {
+    if (v.type == RES_NUM && !isnan(v.num))
+    {
         res.kind = STMT_VALUE;
         res.value = v.num;
-    } else if (v.type == RES_STR) {
+    }
+    else if (v.type == RES_STR)
+    {
         printf("%s\n", v.str);
         free(v.str);
     }
 
-    /* Optional recovery on error */
-    if (isnan(v.num) || (v.type == RES_STR && !v.str)) {
+    /* Recovery on error: skip to semicolon/end */
+    if ((v.type == RES_NUM && isnan(v.num)) || (v.type == RES_STR && v.str == NULL))
+    {
         while (p->cur.kind != TK_SEMI && p->cur.kind != TK_END) advance(p);
         if (p->cur.kind == TK_SEMI) advance(p);
     }
 
     return res;
 }
+
+
 void init_constants()
 {
     set_const("pi", 3.14159265358979323846);
@@ -1255,8 +1269,6 @@ static double parse_program(mp_parser *p)
 
     return has_value ? last_value : 0.0;
 }
-
- 
 
 /* ---------------- Cleanup & exec ---------------- */
 double exec(const char *script)
