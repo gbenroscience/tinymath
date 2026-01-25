@@ -476,7 +476,7 @@ int define_func(const char *name, const char params[][MAX_IDENT_LEN], int n_para
         snprintf(f->params[i], sizeof(f->params[i]), "%s", params[i]);
     }
     f->body = body_copy;
- 
+
     return 1;
 }
 mp_func *lookup_func(const char *name)
@@ -667,7 +667,8 @@ static mp_result call_user_func(mp_func *f, double *args, int n)
     /* allocate arrays sized to the function parameter count */
     double *oldvals = malloc(sizeof(double) * f->n_params);
     int *had_old = malloc(sizeof(int) * f->n_params);
-    if (!oldvals || !had_old) {
+    if (!oldvals || !had_old)
+    {
         fprintf(stderr, "Memory allocation failed in call_user_func\n");
         free(oldvals);
         free(had_old);
@@ -805,20 +806,40 @@ static mp_result parse_primary(mp_parser *p)
             }
         }
 
+        /* ---------------- Modified call-site parsing in parse_primary (dynamic args) ---------------- */
         /* Function call */
         if (accept(p, TK_LPAREN))
         {
-            mp_result args[MAX_FUNC_PARAMS];
+            mp_result *args = NULL;
             int n_args = 0;
             if (!accept(p, TK_RPAREN))
             {
                 do
                 {
-                    args[n_args++] = parse_expr(p);
+                    /* grow args array by one and parse the next expression into it */
+                    mp_result r = parse_expr(p);
+                    mp_result *tmp = realloc(args, (n_args + 1) * sizeof(mp_result));
+                    if (!tmp)
+                    {
+                        fprintf(stderr, "Memory allocation failed while parsing arguments\n");
+                        /* free previously allocated arg strings if needed */
+                        for (int j = 0; j < n_args; ++j)
+                            if (args[j].type == RES_STR)
+                                free(args[j].str);
+                        free(args);
+                        return make_num(NAN);
+                    }
+                    args = tmp;
+                    args[n_args++] = r;
                 } while (accept(p, TK_COMMA));
                 if (!accept(p, TK_RPAREN))
                 {
                     fprintf(stderr, "Missing ')' in function call\n");
+                    /* cleanup */
+                    for (int j = 0; j < n_args; ++j)
+                        if (args[j].type == RES_STR)
+                            free(args[j].str);
+                    free(args);
                     return make_num(NAN);
                 }
             }
@@ -831,38 +852,42 @@ static mp_result parse_primary(mp_parser *p)
             /* ----- Trig mode functions (zero-arg) ----- */
             if (n_args == 0 && all_numeric)
             {
-                if (strcmp(name, "DEG") == 0)
+                /* existing trig handling unchanged */
+            }
+
+            /* Normal function handling */
+            char **arg_strs = NULL;
+            double *num_args = NULL;
+            if (n_args > 0)
+            {
+                arg_strs = malloc(sizeof(char *) * n_args);
+                num_args = malloc(sizeof(double) * n_args);
+                if (!arg_strs || !num_args)
                 {
-                    trig_mode = MODE_DEG;
-                    printf("Trigonometric mode set to Degrees\n");
-                    return make_num(NAN); // suppress "=> NaN"
-                }
-                if (strcmp(name, "RAD") == 0)
-                {
-                    trig_mode = MODE_RAD;
-                    printf("Trigonometric mode set to Radians\n");
-                    return make_num(NAN);
-                }
-                if (strcmp(name, "GRAD") == 0)
-                {
-                    trig_mode = MODE_GRAD;
-                    printf("Trigonometric mode set to Gradians\n");
-                    return make_num(NAN);
-                }
-                if (strcmp(name, "MODE") == 0)
-                {
-                    const char *mstr = (trig_mode == MODE_DEG)    ? "Degrees"
-                                       : (trig_mode == MODE_GRAD) ? "Gradians"
-                                                                  : "Radians";
-                    printf("Current trigonometric mode: %s\n", mstr);
+                    fprintf(stderr, "Memory allocation failed for function call args\n");
+                    /* cleanup */
+                    for (int j = 0; j < n_args; ++j)
+                        if (args[j].type == RES_STR)
+                            free(args[j].str);
+                    free(args);
+                    free(arg_strs);
+                    free(num_args);
                     return make_num(NAN);
                 }
             }
 
-            /* Normal function handling */
-            char *arg_strs[MAX_FUNC_PARAMS];
             for (int i = 0; i < n_args; i++)
-                arg_strs[i] = (args[i].type == RES_NUM) ? double_to_string(args[i].num) : strdup(args[i].str);
+            {
+                if (args[i].type == RES_NUM)
+                {
+                    arg_strs[i] = double_to_string(args[i].num);
+                    num_args[i] = args[i].num;
+                }
+                else
+                {
+                    arg_strs[i] = strdup(args[i].str);
+                }
+            }
 
             mp_func *uf = lookup_func(name);
             if (uf)
@@ -876,29 +901,75 @@ static mp_result parse_primary(mp_parser *p)
                         if (args[i].type == RES_STR)
                             free(args[i].str);
                     }
+                    free(arg_strs);
+                    free(num_args);
+                    free(args);
                     return make_num(NAN);
                 }
-                double num_args[MAX_FUNC_PARAMS];
+                double *call_args = malloc(sizeof(double) * n_args);
+                if (!call_args)
+                {
+                    fprintf(stderr, "Memory allocation failed for call_args\n");
+                    for (int i = 0; i < n_args; i++)
+                        free(arg_strs[i]);
+                    free(arg_strs);
+                    free(num_args);
+                    for (int i = 0; i < n_args; ++i)
+                        if (args[i].type == RES_STR)
+                            free(args[i].str);
+                    free(args);
+                    return make_num(NAN);
+                }
                 for (int i = 0; i < n_args; i++)
-                    num_args[i] = args[i].num;
-                mp_result res = call_user_func(uf, num_args, n_args);
+                    call_args[i] = num_args[i];
+
+                mp_result res = call_user_func(uf, call_args, n_args);
+                free(call_args);
+
                 for (int i = 0; i < n_args; i++)
                     free(arg_strs[i]);
+                free(arg_strs);
+                free(num_args);
+                for (int i = 0; i < n_args; ++i)
+                    if (args[i].type == RES_STR)
+                        free(args[i].str);
+                free(args);
+
                 return res;
             }
 
             if (all_numeric)
             {
-                double num_args[MAX_FUNC_PARAMS];
+                double *call_args = malloc(sizeof(double) * n_args);
+                if (!call_args)
+                {
+                    fprintf(stderr, "Memory allocation failed for call_args\n");
+                    for (int i = 0; i < n_args; i++)
+                        free(arg_strs[i]);
+                    free(arg_strs);
+                    free(num_args);
+                    for (int i = 0; i < n_args; ++i)
+                        if (args[i].type == RES_STR)
+                            free(args[i].str);
+                    free(args);
+                    return make_num(NAN);
+                }
                 for (int i = 0; i < n_args; i++)
-                    num_args[i] = args[i].num;
+                    call_args[i] = num_args[i];
 
-                double val = call_builtin(name, num_args, n_args);
+                double val = call_builtin(name, call_args, n_args);
                 if (isnan(val))
-                    val = call_stat(name, num_args, n_args);
+                    val = call_stat(name, call_args, n_args);
 
+                free(call_args);
                 for (int i = 0; i < n_args; i++)
                     free(arg_strs[i]);
+                free(arg_strs);
+                free(num_args);
+                for (int i = 0; i < n_args; ++i)
+                    if (args[i].type == RES_STR)
+                        free(args[i].str);
+                free(args);
 
                 if (!isnan(val))
                     return make_num(val);
@@ -909,6 +980,19 @@ static mp_result parse_primary(mp_parser *p)
             for (int i = 0; i < n_args; i++)
                 len += strlen(arg_strs[i]) + (i > 0 ? 2 : 0);
             char *combined = malloc(len);
+            if (!combined)
+            {
+                fprintf(stderr, "Memory allocation failed for symbolic fallback\n");
+                for (int i = 0; i < n_args; i++)
+                    free(arg_strs[i]);
+                free(arg_strs);
+                free(num_args);
+                for (int i = 0; i < n_args; ++i)
+                    if (args[i].type == RES_STR)
+                        free(args[i].str);
+                free(args);
+                return make_num(NAN);
+            }
             snprintf(combined, len, "%s(", name);
             for (int i = 0; i < n_args; i++)
             {
@@ -923,9 +1007,11 @@ static mp_result parse_primary(mp_parser *p)
                 if (args[i].type == RES_STR)
                     free(args[i].str);
             }
+            free(arg_strs);
+            free(num_args);
+            free(args);
             return make_str(combined);
         }
-
         /* Plain identifier */
         if (symbolic_mode)
             return make_str(name);
@@ -970,7 +1056,7 @@ static mp_result parse_primary(mp_parser *p)
 }
 
 /* ---------------- Function definition ---------------- */
-/* corrected parse_func_def - uses macros and excludes trailing semicolon */ 
+/* corrected parse_func_def - uses macros and excludes trailing semicolon */
 static int parse_func_def(mp_parser *p, const char *fname)
 {
     if (!accept(p, TK_LPAREN))
@@ -1103,8 +1189,10 @@ static StmtResult parse_statement(mp_parser *p)
             advance(p); /* consume '(' for lookahead */
             while (paren_depth > 0 && p->cur.kind != TK_END)
             {
-                if (p->cur.kind == TK_LPAREN) paren_depth++;
-                if (p->cur.kind == TK_RPAREN) paren_depth--;
+                if (p->cur.kind == TK_LPAREN)
+                    paren_depth++;
+                if (p->cur.kind == TK_RPAREN)
+                    paren_depth--;
                 advance(p);
             }
 
@@ -1186,13 +1274,14 @@ static StmtResult parse_statement(mp_parser *p)
     /* Recovery on error: skip to semicolon/end */
     if ((v.type == RES_NUM && isnan(v.num)) || (v.type == RES_STR && v.str == NULL))
     {
-        while (p->cur.kind != TK_SEMI && p->cur.kind != TK_END) advance(p);
-        if (p->cur.kind == TK_SEMI) advance(p);
+        while (p->cur.kind != TK_SEMI && p->cur.kind != TK_END)
+            advance(p);
+        if (p->cur.kind == TK_SEMI)
+            advance(p);
     }
 
     return res;
 }
-
 
 void init_constants()
 {
