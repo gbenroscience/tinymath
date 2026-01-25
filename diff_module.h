@@ -22,7 +22,7 @@ typedef enum { N_NUM, N_VAR, N_OP, N_FUNC } NodeType;
 typedef struct Node {
     NodeType type;
     double num;           /* N_NUM */
-    char name[64];        /* N_VAR or N_FUNC */
+    char name[MAX_IDENT_LEN];        /* N_VAR or N_FUNC */
     char op;              /* N_OP: '+','-','*','/' */
     struct Node *a, *b;   /* binary for N_OP */
     struct Node *args[4]; /* up to 4 args for N_FUNC (sin,cos,log,exp,pow) */
@@ -89,7 +89,7 @@ static Node* d_parse_primary(DLex* lx){
     if(num) return num;
 
     if(lx->i<lx->len && (isalpha((unsigned char)lx->s[lx->i]) || lx->s[lx->i]=='_')){
-        char id[64]; size_t j=0;
+        char id[MAX_IDENT_LEN]; size_t j=0;
         while(lx->i<lx->len && d_is_ident_char(lx->s[lx->i]) && j<sizeof(id)-1) id[j++]=lx->s[lx->i++];
         id[j]='\0';
         if(d_accept(lx,'(')){
@@ -230,7 +230,7 @@ static void p_buf(char** out, size_t* cap, const char* s){
     size_t need=strlen(s);
     size_t cur=strlen(*out);
     if(cur+need+1 > *cap){
-        *cap = (cur+need+64);
+        *cap = (cur+need+MAX_IDENT_LEN);
         *out = (char*)realloc(*out, *cap);
     }
     memcpy(*out+cur, s, need+1);
@@ -243,7 +243,7 @@ static void p_wrap(Node* n, char** out, size_t* cap){
 }
 
 static void p_node_rec(Node* n, char** out, size_t* cap){
-    char tmp[64];
+    char tmp[MAX_IDENT_LEN];
     if(!n){ p_buf(out,cap,"0"); return; }
     switch(n->type){
         case N_NUM:

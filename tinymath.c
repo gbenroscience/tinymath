@@ -40,7 +40,7 @@ typedef struct
 {
     mp_tok_kind kind;
     double num;
-    char ident[64];
+    char ident[MAX_IDENT_LEN];
     size_t pos;
 } mp_token;
 
@@ -58,7 +58,7 @@ typedef struct
 /* ---------------- Dynamic Variable Table ---------------- */
 typedef struct
 {
-    char name[64];
+    char name[MAX_IDENT_LEN];
     double value;
     int is_const; // 1 = constant, 0 = normal variable
 } mp_var;
@@ -81,7 +81,7 @@ static int add_var(const char *name, double value, int is_const)
     /* Grow if needed */
     if (n_vars >= vars_capacity)
     {
-        size_t new_cap = vars_capacity ? vars_capacity * 2 : 64;
+        size_t new_cap = vars_capacity ? vars_capacity * 2 : MAX_IDENT_LEN;
         mp_var *temp = realloc(vars, new_cap * sizeof(mp_var));
         if (!temp)
         {
@@ -186,7 +186,7 @@ static mp_result make_str(const char *s)
 /* ---------------- Helpers for symbolic operations ---------------- */
 static char *double_to_string(double v)
 {
-    char buf[64];
+    char buf[MAX_IDENT_LEN];
     snprintf(buf, sizeof(buf), "%.17g", v);
     return strdup(buf);
 }
@@ -314,7 +314,7 @@ static mp_token next_token(mp_lexer *lx)
 
     if (isalpha((unsigned char)c) || c == '_')
     {
-        char buf[64];
+        char buf[MAX_IDENT_LEN];
         size_t j = 0;
         while (lx->i < lx->len && (isalnum((unsigned char)lx->input[lx->i]) || lx->input[lx->i] == '_'))
         {
@@ -662,8 +662,8 @@ static mp_result call_user_func(mp_func *f, double *args, int n)
                 f->name, n, f->n_params);
         return make_num(NAN);
     }
-    double oldvals[32];
-    int had_old[32] = {0};
+    double oldvals[MAX_FUNC_PARAMS];
+    int had_old[MAX_FUNC_PARAMS] = {0};
     for (int i = 0; i < n; i++)
     {
         had_old[i] = lookup_var(f->params[i], &oldvals[i]);
@@ -691,35 +691,7 @@ static mp_result call_user_func(mp_func *f, double *args, int n)
         /* New parameters are left in global scope - known limitation */
     }
     return result;
-}
-// static mp_result call_user_func(mp_func *f, double *args, int n)
-// {
-//     if (n != f->n_params)
-//     {
-//         fprintf(stderr, "Wrong number of arguments for %s (got %d, expected %d)\n",
-//                 f->name, n, f->n_params);
-//         return make_num(NAN);
-//     }
-//     double oldvals[32];
-//     int had_old[32] = {0};
-//     for (int i = 0; i < n; i++)
-//     {
-//         had_old[i] = lookup_var(f->params[i], &oldvals[i]);
-//         set_var(f->params[i], args[i]);
-//     }
-
-//     mp_parser sub = {{f->body, 0, strlen(f->body)}, {0}};
-//     advance(&sub);
-//     mp_result result = parse_expr(&sub);
-
-//     for (int i = 0; i < n; i++)
-//     {
-//         if (had_old[i])
-//             set_var(f->params[i], oldvals[i]);
-//         /* New parameters are left in global scope - known limitation */
-//     }
-//     return result;
-// }
+} 
 
 /* ---------------- Primary ---------------- */
 /* Primary expression - main change in function call handling */
@@ -734,7 +706,7 @@ static mp_result parse_primary(mp_parser *p)
 
     if (p->cur.kind == TK_IDENT)
     {
-        char name[64];
+        char name[MAX_IDENT_LEN];
         snprintf(name, sizeof(name), "%s", p->cur.ident);
         advance(p);
 
@@ -760,7 +732,7 @@ static mp_result parse_primary(mp_parser *p)
                     free(inner.str);
                 return make_num(NAN);
             }
-            char var[64];
+            char var[MAX_IDENT_LEN];
             snprintf(var, sizeof(var), "%s", p->cur.ident);
             advance(p);
 
@@ -831,7 +803,7 @@ static mp_result parse_primary(mp_parser *p)
         /* Function call */
         if (accept(p, TK_LPAREN))
         {
-            mp_result args[32];
+            mp_result args[MAX_FUNC_PARAMS];
             int n_args = 0;
             if (!accept(p, TK_RPAREN))
             {
@@ -883,7 +855,7 @@ static mp_result parse_primary(mp_parser *p)
             }
 
             /* Normal function handling */
-            char *arg_strs[32];
+            char *arg_strs[MAX_FUNC_PARAMS];
             for (int i = 0; i < n_args; i++)
                 arg_strs[i] = (args[i].type == RES_NUM) ? double_to_string(args[i].num) : strdup(args[i].str);
 
@@ -901,7 +873,7 @@ static mp_result parse_primary(mp_parser *p)
                     }
                     return make_num(NAN);
                 }
-                double num_args[32];
+                double num_args[MAX_FUNC_PARAMS];
                 for (int i = 0; i < n_args; i++)
                     num_args[i] = args[i].num;
                 mp_result res = call_user_func(uf, num_args, n_args);
@@ -912,7 +884,7 @@ static mp_result parse_primary(mp_parser *p)
 
             if (all_numeric)
             {
-                double num_args[32];
+                double num_args[MAX_FUNC_PARAMS];
                 for (int i = 0; i < n_args; i++)
                     num_args[i] = args[i].num;
 
@@ -1082,7 +1054,7 @@ static StmtResult parse_statement(mp_parser *p)
 
     if (p->cur.kind == TK_IDENT)
     {
-        char name[64];
+        char name[MAX_IDENT_LEN];
         snprintf(name, sizeof(name), "%s", p->cur.ident);
 
         /* Save state before consuming the identifier so we can restore later */
@@ -1157,7 +1129,7 @@ static StmtResult parse_statement(mp_parser *p)
         {
             if (p->cur.kind == TK_IDENT)
             {
-                char src[64];
+                char src[MAX_IDENT_LEN];
                 snprintf(src, sizeof(src), "%s", p->cur.ident);
                 advance(p);
                 if (!accept(p, TK_COMMA))
@@ -1167,7 +1139,7 @@ static StmtResult parse_statement(mp_parser *p)
                 }
                 if (p->cur.kind == TK_IDENT)
                 {
-                    char wrt[64];
+                    char wrt[MAX_IDENT_LEN];
                     snprintf(wrt, sizeof(wrt), "%s", p->cur.ident);
                     advance(p);
                     if (!accept(p, TK_RPAREN))
