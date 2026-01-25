@@ -26,10 +26,6 @@ mp_func* lookup_func(const char* name);
  */
 int define_func(const char* name, const char params[][MAX_IDENT_LEN], int n_params,
                 const char* body_start, size_t body_len);
-                /*
-                mp_func* lookup_func(const char* name);
-int define_func(const char* name, char params[][64], int n_params,
-                const char* body_start, size_t body_len);
-                */
+          
 
 #endif /* PARSER_API_H */

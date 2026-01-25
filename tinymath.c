@@ -447,9 +447,9 @@ static size_t funcs_capacity = 0; /* Current allocated capacity (for realloc gro
 
 int define_func(const char *name, const char params[][MAX_IDENT_LEN], int n_params,
                 const char *body_start, size_t body_len)
-{
-    if (n_params > 32) {
-        fprintf(stderr, "Too many parameters (max 32)\n");
+{ 
+    if (n_params > MAX_FUNC_PARAMS) {
+        fprintf(stderr, "Too many parameters (max %d)\n", MAX_FUNC_PARAMS);
         return 0;
     }
 
@@ -999,35 +999,32 @@ static mp_result parse_primary(mp_parser *p)
 }
 
 /* ---------------- Function definition ---------------- */
+/* corrected parse_func_def - uses macros and excludes trailing semicolon */
 static int parse_func_def(mp_parser *p, const char *fname)
 {
-    // 1. Check for opening parenthesis
     if (!accept(p, TK_LPAREN))
     {
         fprintf(stderr, "Error: Expected '(' after function name '%s'\n", fname);
         return 0;
     }
 
-    char params[32][64];
+    char params[MAX_FUNC_PARAMS][MAX_IDENT_LEN];
     int n_params = 0;
 
-    // 2. Parse Parameters strictly: f(a, b, c)
     while (p->cur.kind == TK_IDENT)
     {
-        if (n_params >= 32)
+        if (n_params >= MAX_FUNC_PARAMS)
         {
-            fprintf(stderr, "Error: Function '%s' exceeds limit of 32 parameters\n", fname);
+            fprintf(stderr, "Error: Function '%s' exceeds limit of %d parameters\n", fname, MAX_FUNC_PARAMS);
             return 0;
         }
 
-        snprintf(params[n_params++], 64, "%s", p->cur.ident);
+        snprintf(params[n_params++], MAX_IDENT_LEN, "%s", p->cur.ident);
         advance(p);
 
-        // If there's no comma, we expect the loop to end and see a ')'
         if (p->cur.kind == TK_COMMA)
         {
             advance(p);
-            // After a comma, there MUST be another identifier
             if (p->cur.kind != TK_IDENT)
             {
                 fprintf(stderr, "Error: Trailing comma in parameter list of '%s'\n", fname);
@@ -1040,7 +1037,6 @@ static int parse_func_def(mp_parser *p, const char *fname)
         }
     }
 
-    // 3. Closing syntax checks
     if (!accept(p, TK_RPAREN))
     {
         fprintf(stderr, "Error: Expected ')' after parameters in '%s'\n", fname);
@@ -1052,30 +1048,26 @@ static int parse_func_def(mp_parser *p, const char *fname)
         return 0;
     }
 
-    // 4. Zero-Copy Body Capture
-    // We point directly to the start of the expression in the input string
-    const char *body_start = p->lx.input + p->lx.i;
+    /* capture start index (within input) for zero-copy pass-through */
+    size_t body_start_idx = p->lx.i;
 
-    // Advance the parser until the end of the statement (semicolon or EOF)
+    /* advance until semicolon or end */
     while (p->cur.kind != TK_SEMI && p->cur.kind != TK_END)
-    {
         advance(p);
-    }
 
-    // Calculate length based on current lexer position
-    size_t body_len = (p->lx.input + p->lx.i) - body_start;
+    /* use p->cur.pos (start of current token) to exclude the semicolon */
+    size_t body_end_idx = p->cur.pos;
+    size_t body_len = 0;
+    if (body_end_idx > body_start_idx)
+        body_len = body_end_idx - body_start_idx;
 
-    // Move past the semicolon if it exists
+    /* consume the semicolon token if present */
     if (p->cur.kind == TK_SEMI)
-    {
         advance(p);
-    }
 
-    // 5. Pass to function manager
-    // Ensure your define_func accepts (name, params, count, body_ptr, body_len)
-    return define_func(fname, params, n_params, body_start, body_len);
+    /* pass pointer + length to define_func */
+    return define_func(fname, params, n_params, p->lx.input + body_start_idx, body_len);
 }
-
 /* ---------------- Statement ---------------- */
 typedef enum
 {

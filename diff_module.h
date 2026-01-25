@@ -335,7 +335,7 @@ static int diff_func(const char* src_name, const char* wrt, const char* dst_name
     if (!body_d) return 0;
 
     // Copy parameters from the source function
-    char params[32][64]; // Match your 32-param limit
+    char params[MAX_FUNC_PARAMS][MAX_IDENT_LEN]; // Match your params limit
     for (int i = 0; i < f->n_params; i++) {
         snprintf(params[i], sizeof(params[i]), "%s", f->params[i]);
     }
