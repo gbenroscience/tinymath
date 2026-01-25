@@ -654,6 +654,7 @@ static double call_builtin(const char *name, double *args, int n)
         return pow(args[0], args[1]);
     return NAN;
 }
+/* ---------------- Modified call_user_func (dynamic oldvals/had_old) ---------------- */
 static mp_result call_user_func(mp_func *f, double *args, int n)
 {
     if (n != f->n_params)
@@ -662,36 +663,40 @@ static mp_result call_user_func(mp_func *f, double *args, int n)
                 f->name, n, f->n_params);
         return make_num(NAN);
     }
-    double oldvals[MAX_FUNC_PARAMS];
-    int had_old[MAX_FUNC_PARAMS] = {0};
+
+    /* allocate arrays sized to the function parameter count */
+    double *oldvals = malloc(sizeof(double) * f->n_params);
+    int *had_old = malloc(sizeof(int) * f->n_params);
+    if (!oldvals || !had_old) {
+        fprintf(stderr, "Memory allocation failed in call_user_func\n");
+        free(oldvals);
+        free(had_old);
+        return make_num(NAN);
+    }
+
     for (int i = 0; i < n; i++)
     {
         had_old[i] = lookup_var(f->params[i], &oldvals[i]);
         set_var(f->params[i], args[i]);
     }
 
-    // 1. Initialize the sub-parser
-    mp_parser sub;
-    memset(&sub, 0, sizeof(sub)); // Zero out everything
-
-    sub.lx.input = f->body;
-    sub.lx.i = 0;
-    sub.lx.len = strlen(f->body);
-
-    // 2. Priming the pump
-    advance(&sub); // This loads the first token from the body into sub.cur
-
-    // 3. Parse the expression
+    /* Initialize a sub-parser that evaluates the function body */
+    mp_parser sub = {{f->body, 0, strlen(f->body)}, {0}};
+    advance(&sub);
     mp_result result = parse_expr(&sub);
 
+    /* restore old variable values */
     for (int i = 0; i < n; i++)
     {
         if (had_old[i])
             set_var(f->params[i], oldvals[i]);
-        /* New parameters are left in global scope - known limitation */
+        /* New parameters are left in global scope if they were newly added */
     }
+
+    free(oldvals);
+    free(had_old);
     return result;
-} 
+}
 
 /* ---------------- Primary ---------------- */
 /* Primary expression - main change in function call handling */
