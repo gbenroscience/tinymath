@@ -318,26 +318,33 @@ static char* diff_expr(const char* expr, const char* var) {
 }
 
 
-/* Create a derivative function: dst_name(params...) = d/d(wrt) src_name(body) */
-static int diff_func(const char* src_name, const char* wrt, const char* dst_name){
-
-     mp_func* lookup_func(const char*);   /* provided by your parser */
-     int define_func(const char*, char[][64], int, const char*);
+/* Create a derivative function: dst_name(params...) = d/d(wrt) src_name(body) */ 
+static int diff_func(const char* src_name, const char* wrt, const char* dst_name) {
+    // Prototypes (usually these should be in a header)
+    mp_func* lookup_func(const char*);   
+    int define_func(const char*, char[][64], int, const char*, size_t);
 
     mp_func* f = lookup_func(src_name);
-    if(!f){ fprintf(stderr,"diff_func: unknown function %s\n", src_name); return 0; }
+    if (!f) { 
+        fprintf(stderr, "diff_func: unknown function %s\n", src_name); 
+        return 0; 
+    }
 
+    // Symbolic differentiation: returns a new string like "cos(x) * 1"
     char* body_d = diff_expr(f->body, wrt);
+    if (!body_d) return 0;
 
-    char params[16][64];
-    for(int i=0;i<f->n_params;i++){
+    // Copy parameters from the source function
+    char params[32][64]; // Match your 32-param limit
+    for (int i = 0; i < f->n_params; i++) {
         snprintf(params[i], sizeof(params[i]), "%s", f->params[i]);
     }
 
-    int ok = define_func(dst_name, params, f->n_params, body_d);
-    free(body_d);
+    // Pass the body and its length
+    int ok = define_func(dst_name, params, f->n_params, body_d, strlen(body_d));
+    
+    free(body_d); // Clean up the string allocated by diff_expr
     return ok;
 }
-
 
 #endif /* DIFF_MODULE_H */
