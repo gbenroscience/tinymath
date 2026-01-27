@@ -16,6 +16,7 @@
 #include <math.h>
 #include "parser_api.h"
 #include "diff_module.h"
+ 
 /* ---------------- Parser ---------------- */
 
 /* ---------------- Lexer ---------------- */
