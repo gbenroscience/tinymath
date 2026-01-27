@@ -1,11 +1,14 @@
-/* diff_module.h
- * Minimal symbolic differentiation for your math parser.
- * Depends on: define_func(...), lookup_func(...).
- * Compile with: -lm
- */
-
 #ifndef DIFF_MODULE_H
 #define DIFF_MODULE_H
+
+/* Minimal symbolic differentiation module.
+ * This header implements static helper functions (diff_expr, diff_func)
+ * that rely on the parser API declared in parser_api.h.
+ *
+ * The API requires an explicit mp_context* (see parser_api.h). That
+ * pointer is passed through to lookup/define calls so the diff module
+ * doesn't rely on TLS or hidden globals.
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,7 +17,6 @@
 #include <math.h>
 #include "parser_api.h"
 
-
 /* ---------- AST ---------- */
 
 typedef enum { N_NUM, N_VAR, N_OP, N_FUNC } NodeType;
@@ -22,32 +24,105 @@ typedef enum { N_NUM, N_VAR, N_OP, N_FUNC } NodeType;
 typedef struct Node {
     NodeType type;
     double num;           /* N_NUM */
-    char name[64];        /* N_VAR or N_FUNC */
+    char *name;           /* N_VAR or N_FUNC (heap-allocated; may be NULL) */
     char op;              /* N_OP: '+','-','*','/' */
     struct Node *a, *b;   /* binary for N_OP */
-    struct Node *args[4]; /* up to 4 args for N_FUNC (sin,cos,log,exp,pow) */
+    struct Node **args;   /* heap-allocated array of Node* for N_FUNC */
     int n_args;
 } Node;
 
-static Node* nd_num(double v){ Node* n=(Node*)calloc(1,sizeof(Node)); n->type=N_NUM; n->num=v; return n; }
-static Node* nd_var(const char* s){ Node* n=(Node*)calloc(1,sizeof(Node)); n->type=N_VAR; snprintf(n->name,sizeof(n->name),"%s",s); return n; }
-static Node* nd_op(char op, Node* a, Node* b){ Node* n=(Node*)calloc(1,sizeof(Node)); n->type=N_OP; n->op=op; n->a=a; n->b=b; return n; }
-static Node* nd_func(const char* f, Node* x){ Node* n=(Node*)calloc(1,sizeof(Node)); n->type=N_FUNC; snprintf(n->name,sizeof(n->name),"%s",f); n->args[0]=x; n->n_args=1; return n; }
-static Node* nd_pow(Node* u, Node* v){ Node* n=(Node*)calloc(1,sizeof(Node)); n->type=N_FUNC; snprintf(n->name,sizeof(n->name),"%s","pow"); n->args[0]=u; n->args[1]=v; n->n_args=2; return n; }
+/* Node constructors / helpers (allocate and initialize) */
 
-static Node* nd_copy(Node* n){
-    if(!n) return NULL;
-    Node* r=(Node*)calloc(1,sizeof(Node));
-    memcpy(r,n,sizeof(Node));
-    if(n->type==N_OP){ r->a=nd_copy(n->a); r->b=nd_copy(n->b); }
-    else if(n->type==N_FUNC){ for(int i=0;i<n->n_args;i++) r->args[i]=nd_copy(n->args[i]); }
+static Node* nd_alloc(void) {
+    Node *n = (Node*)calloc(1, sizeof(Node));
+    return n;
+}
+
+static Node* nd_num(double v) {
+    Node* n = nd_alloc();
+    n->type = N_NUM;
+    n->num = v;
+    return n;
+}
+
+static Node* nd_var(const char* s) {
+    Node* n = nd_alloc();
+    n->type = N_VAR;
+    n->name = strdup(s ? s : "");
+    return n;
+}
+
+static Node* nd_op(char op, Node* a, Node* b) {
+    Node* n = nd_alloc();
+    n->type = N_OP;
+    n->op = op;
+    n->a = a;
+    n->b = b;
+    return n;
+}
+
+/* Create a function node with given name and argument list */
+static Node* nd_func_n(const char* f, Node** argv, int n_args) {
+    Node* n = nd_alloc();
+    n->type = N_FUNC;
+    n->name = strdup(f ? f : "");
+    if (n_args > 0) {
+        n->args = (Node**)malloc(sizeof(Node*) * n_args);
+        for (int i = 0; i < n_args; ++i) n->args[i] = argv[i];
+    } else {
+        n->args = NULL;
+    }
+    n->n_args = n_args;
+    return n;
+}
+
+/* Convenience single-arg and two-arg factories to minimize churn */
+static Node* nd_func(const char* f, Node* x) {
+    Node* argv[1] = { x };
+    return nd_func_n(f, argv, 1);
+}
+
+static Node* nd_pow(Node* u, Node* v) {
+    Node* argv[2] = { u, v };
+    return nd_func_n("pow", argv, 2);
+}
+
+/* Deep copy and free helpers (must manage heap fields) */
+
+static Node* nd_copy(Node* n) {
+    if (!n) return NULL;
+    Node* r = nd_alloc();
+    r->type = n->type;
+    r->num = n->num;
+    r->op = n->op;
+    r->a = NULL;
+    r->b = NULL;
+    r->name = n->name ? strdup(n->name) : NULL;
+    r->n_args = n->n_args;
+    r->args = NULL;
+    if (n->type == N_OP) {
+        r->a = nd_copy(n->a);
+        r->b = nd_copy(n->b);
+    } else if (n->type == N_FUNC) {
+        if (n->n_args > 0) {
+            r->args = (Node**)malloc(sizeof(Node*) * n->n_args);
+            for (int i = 0; i < n->n_args; ++i)
+                r->args[i] = nd_copy(n->args[i]);
+        }
+    }
     return r;
 }
 
-static void nd_free(Node* n){
-    if(!n) return;
-    if(n->type==N_OP){ nd_free(n->a); nd_free(n->b); }
-    else if(n->type==N_FUNC){ for(int i=0;i<n->n_args;i++) nd_free(n->args[i]); }
+static void nd_free(Node* n) {
+    if (!n) return;
+    if (n->type == N_OP) {
+        nd_free(n->a);
+        nd_free(n->b);
+    } else if (n->type == N_FUNC) {
+        for (int i = 0; i < n->n_args; ++i) nd_free(n->args[i]);
+        free(n->args);
+    }
+    free(n->name);
     free(n);
 }
 
@@ -89,18 +164,42 @@ static Node* d_parse_primary(DLex* lx){
     if(num) return num;
 
     if(lx->i<lx->len && (isalpha((unsigned char)lx->s[lx->i]) || lx->s[lx->i]=='_')){
-        char id[64]; size_t j=0;
+        char id[MAX_IDENT_LEN]; size_t j=0;
         while(lx->i<lx->len && d_is_ident_char(lx->s[lx->i]) && j<sizeof(id)-1) id[j++]=lx->s[lx->i++];
         id[j]='\0';
         if(d_accept(lx,'(')){
-            Node* args[2]={0}; int n=0;
+            /* parse comma-separated args into a small dynamic vector */
+            Node **args = NULL;
+            int n = 0;
             if(!d_accept(lx,')')){
-                args[n++]=d_parse_expr(lx);
-                if(d_accept(lx,',')) args[n++]=d_parse_expr(lx);
+                do {
+                    Node *arg = d_parse_expr(lx);
+                    Node **tmp = realloc(args, sizeof(Node*) * (n + 1));
+                    if (!tmp) { /* allocation failure - cleanup and abort */ 
+                        for (int k = 0; k < n; ++k) nd_free(args[k]);
+                        free(args);
+                        return NULL;
+                    }
+                    args = tmp;
+                    args[n++] = arg;
+                } while (d_accept(lx,','));
                 d_accept(lx,')');
             }
-            if(strcmp(id,"pow")==0 && n==2) return nd_pow(args[0],args[1]);
-            if(n==1) return nd_func(id,args[0]);
+            if(strcmp(id,"pow")==0 && n==2) {
+                Node* r = nd_pow(args[0], args[1]);
+                free(args);
+                return r;
+            }
+            if(n==1) {
+                Node* r = nd_func(id, args[0]);
+                free(args);
+                return r;
+            }
+            if (n > 1) {
+                Node *r = nd_func_n(id, args, n);
+                free(args);
+                return r;
+            }
             return nd_var(id);
         }
         return nd_var(id);
@@ -111,41 +210,37 @@ static Node* d_parse_primary(DLex* lx){
 static Node* d_parse_factor(DLex* lx){
     Node* u=d_parse_primary(lx);
     if(d_accept(lx,'^')){
-        Node* v=d_parse_factor(lx); /* right-assoc */
+        Node* v=d_parse_factor(lx);
         return nd_pow(u,v);
     }
     return u;
 }
 
 static Node* d_parse_term(DLex* lx){
-    Node* v=d_parse_factor(lx);
+    Node* n=d_parse_factor(lx);
     while(1){
-        if(d_accept(lx,'*')) v=nd_op('*', v, d_parse_factor(lx));
-        else if(d_accept(lx,'/')) v=nd_op('/', v, d_parse_factor(lx));
+        if(d_accept(lx,'*')) n=nd_op('*', n, d_parse_factor(lx));
+        else if(d_accept(lx,'/')) n=nd_op('/', n, d_parse_factor(lx));
         else break;
     }
-    return v;
+    return n;
 }
 
 static Node* d_parse_expr(DLex* lx){
-    Node* v=d_parse_term(lx);
+    Node *n=d_parse_term(lx);
     while(1){
-        if(d_accept(lx,'+')) v=nd_op('+', v, d_parse_term(lx));
-        else if(d_accept(lx,'-')) v=nd_op('-', v, d_parse_term(lx));
+        if(d_accept(lx,'+')) n=nd_op('+', n, d_parse_term(lx));
+        else if(d_accept(lx,'-')) n=nd_op('-', n, d_parse_term(lx));
         else break;
     }
-    return v;
+    return n;
 }
 
-static Node* parse_to_ast(const char* expr){
-    DLex lx={expr,0,strlen(expr)};
-    return d_parse_expr(&lx);
-}
-
-/* ---------- Differentiation ---------- */
 
 static int is_var(Node* n, const char* x){ return n->type==N_VAR && strcmp(n->name,x)==0; }
 static int is_num(Node* n, double v){ return n->type==N_NUM && fabs(n->num - v) < 1e-15; }
+
+/* Differentiator and simplifier (uses Node API) */
 
 static Node* d_diff(Node* n, const char* x){
     if(!n) return nd_num(0);
@@ -224,24 +319,17 @@ static Node* s_simpl(Node* n){
     return n;
 }
 
-/* ---------- Printer ---------- */
+/* ---------- Pretty-print AST -> string ---------- */
 
 static void p_buf(char** out, size_t* cap, const char* s){
     size_t need=strlen(s);
     size_t cur=strlen(*out);
-    if(cur+need+1 > *cap){
+    if(cur+need+1 >= *cap){
         *cap = (cur+need+64);
         *out = (char*)realloc(*out, *cap);
     }
     memcpy(*out+cur, s, need+1);
 }
-
-static void p_node_rec(Node* n, char** out, size_t* cap);
-
-static void p_wrap(Node* n, char** out, size_t* cap){
-    p_buf(out,cap,"("); p_node_rec(n,out,cap); p_buf(out,cap,")");
-}
-
 static void p_node_rec(Node* n, char** out, size_t* cap){
     char tmp[64];
     if(!n){ p_buf(out,cap,"0"); return; }
@@ -251,7 +339,7 @@ static void p_node_rec(Node* n, char** out, size_t* cap){
             p_buf(out,cap,tmp);
             break;
         case N_VAR:
-            p_buf(out,cap,n->name);
+            p_buf(out,cap,n->name ? n->name : "");
             break;
         case N_OP:
             if(n->op=='+'||n->op=='-'){
@@ -259,16 +347,21 @@ static void p_node_rec(Node* n, char** out, size_t* cap){
                 snprintf(tmp,sizeof(tmp)," %c ", n->op); p_buf(out,cap,tmp);
                 p_node_rec(n->b,out,cap);
             } else if(n->op=='*'){
-                p_wrap(n->a,out,cap); p_buf(out,cap,"*"); p_wrap(n->b,out,cap);
+                p_buf(out,cap,"("); p_node_rec(n->a,out,cap); p_buf(out,cap,")");
+                p_buf(out,cap,"*");
+                p_buf(out,cap,"("); p_node_rec(n->b,out,cap); p_buf(out,cap,")");
             } else if(n->op=='/'){
-                p_wrap(n->a,out,cap); p_buf(out,cap,"/"); p_wrap(n->b,out,cap);
+                p_buf(out,cap,"("); p_node_rec(n->a,out,cap); p_buf(out,cap,")");
+                p_buf(out,cap,"/");
+                p_buf(out,cap,"("); p_node_rec(n->b,out,cap); p_buf(out,cap,")");
             }
             break;
         case N_FUNC:
-            if(strcmp(n->name,"pow")==0){
-                p_wrap(n->args[0],out,cap); p_buf(out,cap,"^"); p_wrap(n->args[1],out,cap);
+            if(n->name && strcmp(n->name,"pow")==0 && n->n_args==2){
+                p_buf(out,cap,"("); p_node_rec(n->args[0],out,cap); p_buf(out,cap,")^("); p_node_rec(n->args[1],out,cap); p_buf(out,cap,")");
             } else {
-                p_buf(out,cap,n->name); p_buf(out,cap,"(");
+                p_buf(out,cap,n->name ? n->name : "");
+                p_buf(out,cap,"(");
                 for(int i=0;i<n->n_args;i++){
                     if(i) p_buf(out,cap,",");
                     p_node_rec(n->args[i],out,cap);
@@ -286,7 +379,7 @@ static char* ast_to_string(Node* n){
     return out;
 }
 
-/* ---------- Public API ---------- */
+/* ---------- Public API for diff module ---------- */
 
 /* Returns a heap-allocated string with d/d(var) expr; caller must free(). */
 static char* diff_expr(const char* expr, const char* var) {
@@ -295,7 +388,8 @@ static char* diff_expr(const char* expr, const char* var) {
         return strdup("NaN");
     }
 
-    Node* ast = parse_to_ast(expr);
+    DLex lx = { expr, 0, strlen(expr) };
+    Node* ast = d_parse_expr(&lx);
     if (!ast) {
         fprintf(stderr, "diff_expr: failed to parse expression: %s\n", expr);
         return strdup("NaN");
@@ -317,27 +411,26 @@ static char* diff_expr(const char* expr, const char* var) {
     return result;
 }
 
+/* Create a derivative function: dst_name(params...) = d/d(wrt) src_name(body)
+ * Requires explicit mp_context* so we can lookup/define in the correct context.
+ */
+static int diff_func(mp_context* ctx, const char* src_name, const char* wrt, const char* dst_name){
+    if (!ctx) { fprintf(stderr, "diff_func: null context\n"); return 0; }
 
-/* Create a derivative function: dst_name(params...) = d/d(wrt) src_name(body) */
-static int diff_func(const char* src_name, const char* wrt, const char* dst_name){
-
-     mp_func* lookup_func(const char*);   /* provided by your parser */
-     int define_func(const char*, char[][64], int, const char*);
-
-    mp_func* f = lookup_func(src_name);
+    mp_func* f = lookup_func(ctx, src_name);
     if(!f){ fprintf(stderr,"diff_func: unknown function %s\n", src_name); return 0; }
 
     char* body_d = diff_expr(f->body, wrt);
+    if (!body_d) return 0;
 
-    char params[16][64];
+    char params[MAX_FUNC_PARAMS][MAX_IDENT_LEN];
     for(int i=0;i<f->n_params;i++){
-        snprintf(params[i], sizeof(params[i]), "%s", f->params[i]);
+        snprintf(params[i], MAX_IDENT_LEN, "%s", f->params[i]);
     }
 
-    int ok = define_func(dst_name, params, f->n_params, body_d);
+    int ok = define_func(ctx, dst_name, params, f->n_params, body_d, strlen(body_d));
     free(body_d);
     return ok;
 }
-
 
 #endif /* DIFF_MODULE_H */
