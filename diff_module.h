@@ -1,13 +1,14 @@
-/* diff_module.h
- * Minimal symbolic differentiation for your math parser.
- * Depends on: define_func(...), lookup_func(...).
- * Compile with: -lm
- *
- * Revised: dynamic AST node names and dynamic args array (no fixed args[4]/name[64])
- */
-
 #ifndef DIFF_MODULE_H
 #define DIFF_MODULE_H
+
+/* Minimal symbolic differentiation module.
+ * This header implements static helper functions (diff_expr, diff_func)
+ * that rely on the parser API declared in parser_api.h.
+ *
+ * The API requires an explicit mp_context* (see parser_api.h). That
+ * pointer is passed through to lookup/define calls so the diff module
+ * doesn't rely on TLS or hidden globals.
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -125,10 +126,7 @@ static void nd_free(Node* n) {
     free(n);
 }
 
-/* ---------- Tiny parser to AST (expr subset) ----------
-   The parser here produces Node* trees using the above constructors.
-   Most parsing code is unchanged and simply calls nd_var / nd_func / nd_pow etc.
-*/
+/* ---------- Tiny parser to AST (expr subset) ---------- */
 
 typedef struct { const char* s; size_t i, len; } DLex;
 
@@ -197,10 +195,9 @@ static Node* d_parse_primary(DLex* lx){
                 free(args);
                 return r;
             }
-            /* For no-arg functions we still treat as variable if no args */
             if (n > 1) {
                 Node *r = nd_func_n(id, args, n);
-                free(args); /* nd_func_n took ownership by copying pointers, but we passed args pointers - to avoid double-free, nd_func_n used the same Node* pointers; free the array only */
+                free(args);
                 return r;
             }
             return nd_var(id);
@@ -242,13 +239,8 @@ static Node* d_parse_expr(DLex* lx){
 
 static int is_var(Node* n, const char* x){ return n->type==N_VAR && strcmp(n->name,x)==0; }
 static int is_num(Node* n, double v){ return n->type==N_NUM && fabs(n->num - v) < 1e-15; }
-/* Simplifier and differentiator (kept mostly unchanged) */
-/* Implementations assume Node uses dynamic name/args and use nd_copy/nd_free accordingly.
-   The simplifier and differentiation functions from the original code should be copied in here
-   and adjusted as needed to use Node->name and Node->args. For brevity, include your existing
-   d_diff / s_simpl / etc. implementations here, updating direct struct copies to use nd_copy.
-*/
 
+/* Differentiator and simplifier (uses Node API) */
 
 static Node* d_diff(Node* n, const char* x){
     if(!n) return nd_num(0);
@@ -327,7 +319,6 @@ static Node* s_simpl(Node* n){
     return n;
 }
 
-
 /* ---------- Pretty-print AST -> string ---------- */
 
 static void p_buf(char** out, size_t* cap, const char* s){
@@ -388,7 +379,7 @@ static char* ast_to_string(Node* n){
     return out;
 }
 
-/* ---------- Public API ---------- */
+/* ---------- Public API for diff module ---------- */
 
 /* Returns a heap-allocated string with d/d(var) expr; caller must free(). */
 static char* diff_expr(const char* expr, const char* var) {
@@ -404,15 +395,14 @@ static char* diff_expr(const char* expr, const char* var) {
         return strdup("NaN");
     }
 
-    /* Your differentiation function d_diff and simplifier s_simpl should accept Node* roots */
-    Node* d = d_diff(ast, var); /* assumes d_diff is implemented below using Node helpers */
+    Node* d = d_diff(ast, var);
     if (!d) {
         fprintf(stderr, "diff_expr: differentiation failed\n");
         nd_free(ast);
         return strdup("NaN");
     }
 
-    Node* simplified = s_simpl(d); /* s_simpl should use nd_copy/nd_free and Node API */
+    Node* simplified = s_simpl(d);
     char* result = ast_to_string(simplified);
 
     nd_free(simplified);
@@ -421,9 +411,13 @@ static char* diff_expr(const char* expr, const char* var) {
     return result;
 }
 
-/* Create a derivative function: dst_name(params...) = d/d(wrt) src_name(body) */
-static int diff_func(const char* src_name, const char* wrt, const char* dst_name){
-    mp_func* f = lookup_func(src_name);
+/* Create a derivative function: dst_name(params...) = d/d(wrt) src_name(body)
+ * Requires explicit mp_context* so we can lookup/define in the correct context.
+ */
+static int diff_func(mp_context* ctx, const char* src_name, const char* wrt, const char* dst_name){
+    if (!ctx) { fprintf(stderr, "diff_func: null context\n"); return 0; }
+
+    mp_func* f = lookup_func(ctx, src_name);
     if(!f){ fprintf(stderr,"diff_func: unknown function %s\n", src_name); return 0; }
 
     char* body_d = diff_expr(f->body, wrt);
@@ -434,7 +428,7 @@ static int diff_func(const char* src_name, const char* wrt, const char* dst_name
         snprintf(params[i], MAX_IDENT_LEN, "%s", f->params[i]);
     }
 
-    int ok = define_func(dst_name, params, f->n_params, body_d, strlen(body_d));
+    int ok = define_func(ctx, dst_name, params, f->n_params, body_d, strlen(body_d));
     free(body_d);
     return ok;
 }
