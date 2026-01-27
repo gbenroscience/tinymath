@@ -1,30 +1,20 @@
 /*
- * tinymath.c (thread-safe)
+ * tinymath.c (thread-safe adjustments)
  * Recursive-descent math parser with variables, built-in functions,
  * user-defined functions, proper distinction between definitions and calls,
  * and fixed nested symbolic differentiation via partial symbolic mode
  * with proper parentheses in symbolic expressions to preserve precedence.
  *
- * This variant is reentrant / thread-safe by using a per-thread execution
- * context (thread-local pointer). Each call to exec() creates an independent
- * context so multiple threads can call exec() concurrently without races.
+ * This variant moves symbolic_mode and trig_mode into the execution context
+ * (mp_context) so each parser instance (context) has its own trig/symbolic state.
  *
  * Compile (Linux/macOS): gcc -O2 -std=c99 -Wall -lm -o math_parser tinymath.c
  * Compile (Windows/MinGW): gcc -O2 -std=c99 -Wall -lm -o math_parser.exe tinymath.c
  *
- * Notes on thread-safety:
- * - A thread-local pointer `current_ctx` points to the active context while
- *   parsing/evaluating. All parser state (variable table, function table)
- *   is stored in the context.
- * - lookup_func and define_func follow the API in parser_api.h and operate
- *   on the thread-local context, so the diff module (which calls those
- *   functions) also works correctly inside exec().
- * - This design isolates parser state per exec() call and avoids global locks.
- *
- * Limitations:
- * - Functions/variables defined in one exec() invocation are NOT visible to
- *   other exec() invocations. If you want shared global state across threads,
- *   you'll need to implement a shared context and synchronization primitives.
+ * Note: This file assumes diff_module.h and parser_api.h are available as in
+ * your provided code. Only symbolic_mode and trig_mode have been relocated to
+ * the mp_context structure; other thread-safety considerations (heap context,
+ * nested exec save/restore) can be applied later if desired.
  */
 
 #include <stdio.h>
@@ -42,18 +32,26 @@
 #define THREAD_LOCAL _Thread_local
 #endif
 
-/* ---------------- Execution Context ----------------
-   All mutable parser state (vars, funcs, counts) lives inside mp_context.
-   exec() creates a context and sets the thread-local pointer to it while
-   parsing/evaluating. This keeps concurrent exec() calls independent.
-*/
+/* ---------------- Dynamic Variable Table ---------------- */
 typedef struct
 {
     char name[MAX_IDENT_LEN];
     double value;
-    int is_const;
+    int is_const; // 1 = constant, 0 = normal variable
 } mp_var;
 
+/* Trigonometric mode */
+typedef enum
+{
+    MODE_RAD,
+    MODE_DEG,
+    MODE_GRAD
+} trig_mode_t;
+/* ---------------- Execution Context ----------------
+   All mutable parser state (vars, funcs, counts) lives inside mp_context.
+   exec() creates a context and sets the thread-local pointer to it while
+   parsing/evaluating.
+*/
 typedef struct
 {
     mp_var *vars;
@@ -63,6 +61,10 @@ typedef struct
     mp_func *funcs;
     size_t n_funcs;
     size_t funcs_capacity;
+
+    /* Moved here: per-context symbolic and trig modes */
+    int symbolic_mode; /* 1 = symbolic mode enabled */
+    trig_mode_t trig_mode;
 } mp_context;
 
 /* Thread-local pointer to current context. Accessed by all functions that
@@ -199,24 +201,18 @@ static int lookup_var(const char *name, double *out)
     return 0;
 }
 
-/* Partial symbolic mode - ignores numeric bindings, treats identifiers symbolically */
-static int symbolic_mode = 0;
-
-/* Trigonometric mode */
-typedef enum
-{
-    MODE_RAD,
-    MODE_DEG,
-    MODE_GRAD
-} trig_mode_t;
-static trig_mode_t trig_mode = MODE_RAD;
+/* Trigonometric mode helper reads per-context mode */
 static const double PI = 3.14159265358979323846;
 
 static double to_radians(double angle)
 {
-    if (trig_mode == MODE_DEG)
+    mp_context *ctx = ctx_get();
+    if (!ctx)
+        return angle; /* default: assume radians if no context */
+
+    if (ctx->trig_mode == MODE_DEG)
         return angle * PI / 180.0;
-    if (trig_mode == MODE_GRAD)
+    if (ctx->trig_mode == MODE_GRAD)
         return angle * PI / 200.0;
     return angle;
 }
@@ -790,12 +786,14 @@ static mp_result parse_primary(mp_parser *p)
         snprintf(name, sizeof(name), "%s", p->cur.ident);
         advance(p);
 
+        mp_context *ctx = ctx_get();
+
         /* Special diff(...) */
         if (strcmp(name, "diff") == 0 && accept(p, TK_LPAREN))
         {
-            symbolic_mode = 1;
+            if (ctx) ctx->symbolic_mode = 1;
             mp_result inner = parse_expr(p);
-            symbolic_mode = 0;
+            if (ctx) ctx->symbolic_mode = 0;
 
             if (!accept(p, TK_COMMA))
             {
@@ -1087,7 +1085,7 @@ static mp_result parse_primary(mp_parser *p)
             return make_str(combined);
         }
         /* Plain identifier */
-        if (symbolic_mode)
+        if (ctx && ctx->symbolic_mode)
             return make_str(name);
 
         double v;
@@ -1420,6 +1418,11 @@ double exec(const char *script)
 {
     mp_context ctx_storage;
     memset(&ctx_storage, 0, sizeof(ctx_storage));
+
+    /* initialize per-context modes to defaults */
+    ctx_storage.symbolic_mode = 0;
+    ctx_storage.trig_mode = MODE_RAD;
+
     current_ctx = &ctx_storage;
 
     mp_parser p = {{script, 0, strlen(script)}, {0}};
