@@ -99,7 +99,7 @@ There are no hidden TLS globals: parser state (vars, funcs, trig/symbolic mode, 
 
 Two threads that each create and use their own `mp_context` (the recommended usage) can run concurrently with no races in the library itself.
 
-# Safe caller-side locking patterns and 2 self-contained example programs
+## Safe caller-side locking patterns and 2 self-contained example programs
 
 ### Example A — Per-thread contexts (no locking)
 Each thread creates its own context, uses it, and destroys it when done.
