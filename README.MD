@@ -218,3 +218,9 @@ int main(void)
 ```
 Compile with: gcc -O2 -std=c99 -Wall -pthread -o shared_ctx_example shared_ctx_example.c
 ```
+
+
+## Tests:
+To run the provided tests, on Windows, fire up a command prompt window, navigate to the project directory and type **run_tests.bat** and then, press **Enter**.
+
+On Linux systems, fire up a terminal window, navigate to the project directory and type **run_tests.sh** and then, press **Enter**

@@ -1325,43 +1325,76 @@ double exec(const char *script)
 }
 
 /* ---------------- Demo main ---------------- */
-
-int main(void)
+/* Replace your existing main with this one (or adapt it) */
+int main(int argc, char **argv)
 {
-    const char *script =
-        "f(a,b)=a*a+b*2;"
-        "x=10;"
-        "y=3;"
-        "f(20,5);"
-        "sin(pi/2);"
-        "DEG();"
-        "sin(21);"
-        "RAD();"
-        "sin(21);"
-        "GRAD();"
-        "sin(21);"
-        "28*ln(32)+sum(3,5,7,9,sin(pi/2),12);"
-        "MODE();"
-        "f(2,5);"
-        "4%3;"
-        "10%3;"
-        "(13%9)+2^(5%3);"
-        "-10%3;"
-        "GRAD();"
-        "sin(pi/2);"
-        "a11=5.2;b13=3.8;"
-        "sin(a11-4*b13);"
-        "g(x)=x^3-2*x+1;"
-        "g(3);"
-        "diff(g(x)-sin(x), x);"
-        "diff(g(x),x, 3);"
-        "diff(sin(x^3-3*x-2), x);"
-        "diff(diff(sin(x^3), x), x);"
-        "diff(diff(diff(sin(x), x), x), x);"
-        "diff(sin(x), x, pi);";
+    const char *script = NULL;
+    char *filebuf = NULL;
+
+    if (argc >= 2)
+    {
+        const char *arg = argv[1];
+        /* If the first character is '@' treat as filename, else treat as inline script.
+           This avoids ambiguity if scripts contain spaces; use @filename to load file. */
+        if (arg[0] == '@')
+        {
+            const char *fname = arg + 1;
+            FILE *f = fopen(fname, "rb");
+            if (!f) { fprintf(stderr, "Failed to open script file: %s\n", fname); return 1; }
+            fseek(f, 0, SEEK_END);
+            long sz = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            filebuf = malloc((size_t)sz + 1);
+            if (!filebuf) { fclose(f); fprintf(stderr, "Out of memory\n"); return 1; }
+            if (fread(filebuf, 1, (size_t)sz, f) != (size_t)sz) { fclose(f); free(filebuf); fprintf(stderr, "Read error\n"); return 1; }
+            fclose(f);
+            filebuf[sz] = '\0';
+            script = filebuf;
+        }
+        else
+        {
+            /* treat argv[1] as inline script (no need for quoting) */
+            script = argv[1];
+        }
+    }
+    else
+    {
+        /* default demo script (unchanged) */
+        script =
+            "f(a,b)=a*a+b*2;"
+            "x=10;"
+            "y=3;"
+            "f(20,5);"
+            "sin(pi/2);"
+            "DEG();"
+            "sin(21);"
+            "RAD();"
+            "sin(21);"
+            "GRAD();"
+            "sin(21);"
+            "MODE();"
+            "f(2,5);"
+            "sum(3,5,7,9,sin(pi/2),12);"
+            "4%3;"
+            "10%3;"
+            "(13%9)+2^(5%3);"
+            "-10%3;"
+            "GRAD();"
+            "sin(pi/2);"
+            "g(x)=x^3-2*x+1;"
+            "g(3);"
+            "diff(g(x)-sin(x), x);"
+            "diff(g(x),x, 3);"
+            "diff(sin(x^2-3*x-2), x);"
+            "diff(diff(sin(x), x), x);"
+            "diff(diff(diff(sin(x), x), x), x);"
+            "diff(sin(x), x, pi);";
+    }
 
     printf("Input program:\n%s\n\n", script);
     double result = exec(script);
     printf("\nLast evaluated value: %.17g\n", result);
+
+    free(filebuf);
     return 0;
 }
