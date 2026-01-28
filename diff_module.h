@@ -1,13 +1,14 @@
 #ifndef DIFF_MODULE_H
 #define DIFF_MODULE_H
 
-/* Minimal symbolic differentiation module.
- * This header implements static helper functions (diff_expr, diff_func)
- * that rely on the parser API declared in parser_api.h.
+/* diff_module.h
  *
- * The API requires an explicit mp_context* (see parser_api.h). That
- * pointer is passed through to lookup/define calls so the diff module
- * doesn't rely on TLS or hidden globals.
+ * Symbolic differentiation helpers.
+ * - Adds support for expanding user-defined functions (via mp_context*)
+ *   before differentiating, so expressions like diff(g(x), x) work.
+ *
+ * Intended to be included into tinymath.c (single TU). It uses the
+ * parser_api.h functions lookup_func(ctx, ...) and define_func(ctx, ...).
  */
 
 #include <stdio.h>
@@ -76,7 +77,7 @@ static Node* nd_func_n(const char* f, Node** argv, int n_args) {
     return n;
 }
 
-/* Convenience single-arg and two-arg factories to minimize churn */
+/* Convenience single-arg and two-arg factories */
 static Node* nd_func(const char* f, Node* x) {
     Node* argv[1] = { x };
     return nd_func_n(f, argv, 1);
@@ -87,7 +88,7 @@ static Node* nd_pow(Node* u, Node* v) {
     return nd_func_n("pow", argv, 2);
 }
 
-/* Deep copy and free helpers (must manage heap fields) */
+/* Deep copy and free helpers */
 
 static Node* nd_copy(Node* n) {
     if (!n) return NULL;
@@ -95,8 +96,7 @@ static Node* nd_copy(Node* n) {
     r->type = n->type;
     r->num = n->num;
     r->op = n->op;
-    r->a = NULL;
-    r->b = NULL;
+    r->a = NULL; r->b = NULL;
     r->name = n->name ? strdup(n->name) : NULL;
     r->n_args = n->n_args;
     r->args = NULL;
@@ -236,11 +236,85 @@ static Node* d_parse_expr(DLex* lx){
     return n;
 }
 
+/* ---------- Helpers for expanding user functions ---------- */
+
+/* forward declarations so functions can be used before their definitions */
+static Node* substitute_vars(Node* n, const char* param, Node* repl);
+static Node* expand_node(Node* n, mp_context* ctx);
+
+/* substitute_vars: walk AST n, replace any N_VAR equal to 'param' with a deep copy of repl.
+   Returns (possibly new) Node* for the subtree.
+*/
+static Node* substitute_vars(Node* n, const char* param, Node* repl) {
+    if (!n) return NULL;
+    if (n->type == N_VAR) {
+        if (n->name && strcmp(n->name, param) == 0) {
+            nd_free(n);
+            return nd_copy(repl);
+        }
+        return n;
+    } else if (n->type == N_OP) {
+        n->a = substitute_vars(n->a, param, repl);
+        n->b = substitute_vars(n->b, param, repl);
+        return n;
+    } else if (n->type == N_FUNC) {
+        for (int i = 0; i < n->n_args; ++i)
+            n->args[i] = substitute_vars(n->args[i], param, repl);
+        return n;
+    }
+    return n;
+}
+
+/* expand_node: recursively expand user-defined function calls using ctx.
+   If a function call name matches a user-defined function, parse its body,
+   substitute actual args for parameters, expand recursively and return the
+   expanded subtree (freeing the original node).
+*/
+static Node* expand_node(Node* n, mp_context* ctx) {
+    if (!n) return NULL;
+    if (n->type == N_OP) {
+        n->a = expand_node(n->a, ctx);
+        n->b = expand_node(n->b, ctx);
+        return n;
+    } else if (n->type == N_FUNC) {
+        /* first expand args */
+        for (int i = 0; i < n->n_args; ++i) n->args[i] = expand_node(n->args[i], ctx);
+
+        /* check for user-defined function */
+        mp_func* f = lookup_func(ctx, n->name);
+        if (!f) return n; /* leave as-is (could be builtin or unknown) */
+
+        /* parse the function body into AST */
+        DLex lx = { f->body, 0, strlen(f->body) };
+        Node* body_ast = d_parse_expr(&lx);
+        if (!body_ast) return n;
+
+        /* substitute parameters with provided args */
+        for (int i = 0; i < f->n_params; ++i) {
+            Node* replacement = (i < n->n_args) ? n->args[i] : nd_num(0);
+            /* For safety, use nd_copy in substitution (substitute_vars copies) */
+            body_ast = substitute_vars(body_ast, f->params[i], replacement);
+        }
+
+        /* recursively expand the newly created body (to handle nested user calls) */
+        Node* expanded = expand_node(body_ast, ctx);
+
+        /* free the original call node and its args (they were consumed/copied) */
+        for (int i = 0; i < n->n_args; ++i) nd_free(n->args[i]);
+        free(n->args);
+        free(n->name);
+        free(n);
+
+        return expanded;
+    }
+    /* N_NUM or N_VAR */
+    return n;
+}
+
+/* ---------- Differentiator and simplifier (uses Node API) ---------- */
 
 static int is_var(Node* n, const char* x){ return n->type==N_VAR && strcmp(n->name,x)==0; }
 static int is_num(Node* n, double v){ return n->type==N_NUM && fabs(n->num - v) < 1e-15; }
-
-/* Differentiator and simplifier (uses Node API) */
 
 static Node* d_diff(Node* n, const char* x){
     if(!n) return nd_num(0);
@@ -264,12 +338,14 @@ static Node* d_diff(Node* n, const char* x){
         }
         case N_FUNC: {
             const char* f=n->name;
-            Node* u=n->args[0];
+            /* handle built-in single-arg functions */
+            if (n->n_args <= 0) return nd_num(0);
+            Node* u = n->args[0];
             if(strcmp(f,"sin")==0) return nd_op('*', nd_func("cos", nd_copy(u)), d_diff(u,x));
             if(strcmp(f,"cos")==0) return nd_op('*', nd_num(-1), nd_op('*', nd_func("sin", nd_copy(u)), d_diff(u,x)));
             if(strcmp(f,"exp")==0) return nd_op('*', nd_func("exp", nd_copy(u)), d_diff(u,x));
             if(strcmp(f,"log")==0) return nd_op('*', nd_op('/', nd_num(1), nd_copy(u)), d_diff(u,x));
-            if(strcmp(f,"pow")==0){
+            if(strcmp(f,"pow")==0 && n->n_args==2){
                 Node* a=n->args[0]; Node* b=n->args[1];
                 if(b->type==N_NUM){
                     double k=b->num;
@@ -287,13 +363,14 @@ static Node* d_diff(Node* n, const char* x){
                            ));
                 }
             }
+            /* Unknown function (shouldn't happen after expansion) */
             return nd_num(0);
         }
     }
     return nd_num(0);
 }
 
-/* ---------- Simplifier (light) ---------- */
+/* Simplifier (light) */
 
 static Node* s_simpl(Node* n){
     if(!n) return n;
@@ -319,7 +396,7 @@ static Node* s_simpl(Node* n){
     return n;
 }
 
-/* ---------- Pretty-print AST -> string ---------- */
+/* Pretty-print AST -> string */
 
 static void p_buf(char** out, size_t* cap, const char* s){
     size_t need=strlen(s);
@@ -381,7 +458,51 @@ static char* ast_to_string(Node* n){
 
 /* ---------- Public API for diff module ---------- */
 
-/* Returns a heap-allocated string with d/d(var) expr; caller must free(). */
+/* diff_expr:
+ * - Parses expr, expands any user-defined functions (from ctx) by inlining their
+ *   bodies with parameter substitution, differentiates with respect to var,
+ *   simplifies and returns heap-allocated string. Caller must free().
+ */
+static char* diff_expr_ctx(mp_context* ctx, const char* expr, const char* var) {
+    if (!expr || !var) {
+        fprintf(stderr, "diff_expr_ctx: null input\n");
+        return strdup("NaN");
+    }
+
+    DLex lx = { expr, 0, strlen(expr) };
+    Node* ast = d_parse_expr(&lx);
+    if (!ast) {
+        fprintf(stderr, "diff_expr_ctx: failed to parse expression: %s\n", expr);
+        return strdup("NaN");
+    }
+
+    /* Expand user-defined functions using ctx */
+    Node* expanded = expand_node(ast, ctx);
+    if (!expanded) {
+        nd_free(ast);
+        fprintf(stderr, "diff_expr_ctx: expansion failed\n");
+        return strdup("NaN");
+    }
+
+    Node* d = d_diff(expanded, var);
+    if (!d) {
+        fprintf(stderr, "diff_expr_ctx: differentiation failed\n");
+        nd_free(expanded);
+        return strdup("NaN");
+    }
+
+    Node* simplified = s_simpl(d);
+    char* result = ast_to_string(simplified);
+
+    nd_free(simplified);
+    nd_free(expanded);
+
+    return result;
+}
+
+
+/* Backwards-compatible wrapper: diff_expr (no ctx) behaves as before (no user-function expansion).
+ * Keep for code that expects diff_expr(expr,var). */
 static char* diff_expr(const char* expr, const char* var) {
     if (!expr || !var) {
         fprintf(stderr, "diff_expr: null input\n");
@@ -410,17 +531,14 @@ static char* diff_expr(const char* expr, const char* var) {
 
     return result;
 }
-
-/* Create a derivative function: dst_name(params...) = d/d(wrt) src_name(body)
- * Requires explicit mp_context* so we can lookup/define in the correct context.
- */
+/* Create a derivative function (same as before) */
 static int diff_func(mp_context* ctx, const char* src_name, const char* wrt, const char* dst_name){
     if (!ctx) { fprintf(stderr, "diff_func: null context\n"); return 0; }
 
     mp_func* f = lookup_func(ctx, src_name);
     if(!f){ fprintf(stderr,"diff_func: unknown function %s\n", src_name); return 0; }
 
-    char* body_d = diff_expr(f->body, wrt);
+    char* body_d = diff_expr_ctx(ctx, f->body, wrt);
     if (!body_d) return 0;
 
     char params[MAX_FUNC_PARAMS][MAX_IDENT_LEN];
