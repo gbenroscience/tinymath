@@ -7,6 +7,12 @@ It has, inbuilt into it, the ability to do expression parsing, variables arithme
 2+2\
 4+3*2-5^(3+sin(7))\
 
+### Variables:
+$$
+a11=5.2;b13=3.8;
+sin(a11-4*b13);
+$$
+
 ### Calculus
 
 
