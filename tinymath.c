@@ -1,18 +1,17 @@
 /*
- * tinymath.c (v4.1)
+ * tinymath.c (v4.1a, cleaned)
  *
- * Adds ctx_create / ctx_destroy / exec_with_ctx on top of v4.
- * - ctx_create() allocates and initializes an mp_context on the heap.
- * - ctx_destroy() frees the context and associated tables.
- * - exec_with_ctx() runs a script using an existing context (does not free it).
+ * Full parser with explicit mp_context, ctx_create/ctx_destroy/exec_with_ctx,
+ * caller-side suppression of printing during function evaluation, correct
+ * user-function numeric evaluation and symbolic handling.
  *
- * exec(script) remains as a convenience wrapper that uses ctx_create/exec_with_ctx/ctx_destroy.
+ * Compile:
+ *   gcc -O2 -std=c99 -Wall -lm -o tinymath tinymath.c
  *
- * Note: This version still does NOT add internal synchronization. If you plan to
- * share a single mp_context across multiple threads concurrently, add your own
- * locking (recommended) or request a follow-up that integrates mutexes.
+ * Notes:
+ * - Requires parser_api.h and diff_module.h in the same directory.
  */
-#define _USE_MATH_DEFINES
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,9 +21,12 @@
 #include "parser_api.h"
 #include "diff_module.h"
 
-/* Local constant for pi (avoid relying on M_PI) */
+/* suppress_print: when set, parse_program / parse_statement should not print
+   evaluation results. We temporarily set it while evaluating a function body. */
+static int suppress_print = 0;
+
+/* Local constant for pi */
 static const double PI = 3.14159265358979323846;
-/* Trigonometric mode */
 typedef enum
 {
     MODE_RAD,
@@ -38,7 +40,6 @@ typedef struct
     double value;
     int is_const; // 1 = constant, 0 = normal variable
 } mp_var;
-
 /* ---------------- Execution Context ---------------- */
 
 struct mp_context
@@ -100,11 +101,7 @@ typedef struct
 
 /* ---------------- Result type ---------------- */
 
-typedef enum
-{
-    RES_NUM,
-    RES_STR
-} ResultType;
+typedef enum { RES_NUM, RES_STR } ResultType;
 
 typedef struct
 {
@@ -115,16 +112,8 @@ typedef struct
 
 /* ------------------ Helpers ------------------ */
 
-static mp_result make_num(double v)
-{
-    mp_result r = {RES_NUM, v, NULL};
-    return r;
-}
-static mp_result make_str(const char *s)
-{
-    mp_result r = {RES_STR, NAN, strdup(s)};
-    return r;
-}
+static mp_result make_num(double v) { mp_result r = {RES_NUM, v, NULL}; return r; }
+static mp_result make_str(const char *s) { mp_result r = {RES_STR, NAN, strdup(s)}; return r; }
 
 static char *double_to_string(double v)
 {
@@ -137,9 +126,11 @@ static char *concat3(const char *a, const char *b, const char *c)
 {
     size_t len = strlen(a) + strlen(b) + strlen(c) + 1;
     char *out = malloc(len);
+    if (!out) return NULL;
     snprintf(out, len, "%s%s%s", a, b, c);
     return out;
 }
+
 
 /* ---------------- Forward declarations ---------------- */
 
@@ -147,6 +138,7 @@ static mp_result parse_term(mp_parser *p);
 static mp_result parse_factor(mp_parser *p);
 static mp_result parse_primary(mp_parser *p);
 static mp_result parse_expr(mp_parser *p);
+static double parse_program(mp_parser *p);
 
 /* Binary ops (symbolic-aware) */
 #define DEFINE_BINOP_EXT(name, opstr, numeric_expr)                               \
@@ -171,14 +163,13 @@ static mp_result parse_expr(mp_parser *p);
             free(t);                                                              \
         }                                                                         \
         char *combined = concat3(sa, opstr, sb);                                  \
-        free(sa);                                                                 \
-        free(sb);                                                                 \
+        free(sa); free(sb);                                                       \
         return make_str(combined);                                                \
     }
 
 DEFINE_BINOP_EXT(add, " + ", a.num + b.num)
 DEFINE_BINOP_EXT(sub, " - ", a.num - b.num)
-DEFINE_BINOP_EXT(mul, " * ", a.num *b.num)
+DEFINE_BINOP_EXT(mul, " * ", a.num * b.num)
 DEFINE_BINOP_EXT(divide, " / ", a.num / b.num)
 DEFINE_BINOP_EXT(mod_result, " % ", fmod(a.num, b.num))
 DEFINE_BINOP_EXT(pow_result, "^", pow(a.num, b.num))
@@ -189,28 +180,23 @@ static void skip_ws(mp_lexer *lx)
 {
     for (;;)
     {
-        while (lx->i < lx->len && isspace((unsigned char)lx->input[lx->i]))
-            lx->i++;
+        while (lx->i < lx->len && isspace((unsigned char)lx->input[lx->i])) lx->i++;
         if (lx->i < lx->len && lx->input[lx->i] == '#')
         {
-            while (lx->i < lx->len && lx->input[lx->i] != '\n')
-                lx->i++;
+            while (lx->i < lx->len && lx->input[lx->i] != '\n') lx->i++;
             continue;
         }
-        if (lx->i + 1 < lx->len && lx->input[lx->i] == '/' && lx->input[lx->i + 1] == '/')
+        if (lx->i + 1 < lx->len && lx->input[lx->i] == '/' && lx->input[lx->i+1] == '/')
         {
             lx->i += 2;
-            while (lx->i < lx->len && lx->input[lx->i] != '\n')
-                lx->i++;
+            while (lx->i < lx->len && lx->input[lx->i] != '\n') lx->i++;
             continue;
         }
-        if (lx->i + 1 < lx->len && lx->input[lx->i] == '/' && lx->input[lx->i + 1] == '*')
+        if (lx->i + 1 < lx->len && lx->input[lx->i] == '/' && lx->input[lx->i+1] == '*')
         {
             lx->i += 2;
-            while (lx->i + 1 < lx->len && !(lx->input[lx->i] == '*' && lx->input[lx->i + 1] == '/'))
-                lx->i++;
-            if (lx->i + 1 < lx->len)
-                lx->i += 2;
+            while (lx->i + 1 < lx->len && !(lx->input[lx->i] == '*' && lx->input[lx->i+1] == '/')) lx->i++;
+            if (lx->i + 1 < lx->len) lx->i += 2;
             continue;
         }
         break;
@@ -222,25 +208,47 @@ static mp_token next_token(mp_lexer *lx)
     skip_ws(lx);
     mp_token t = {0};
     t.pos = lx->i;
-    if (lx->i >= lx->len)
-    {
-        t.kind = TK_END;
-        return t;
-    }
+    if (lx->i >= lx->len) { t.kind = TK_END; return t; }
     char c = lx->input[lx->i];
 
-    if (isdigit((unsigned char)c) || (c == '.' && lx->i + 1 < lx->len && isdigit((unsigned char)lx->input[lx->i + 1])))
+    if (isdigit((unsigned char)c) || (c == '.' && lx->i + 1 < lx->len && isdigit((unsigned char)lx->input[lx->i+1])))
     {
         char buf[128];
         size_t j = 0;
-        while (lx->i < lx->len && (isdigit((unsigned char)lx->input[lx->i]) ||
-                                   lx->input[lx->i] == '.' || lx->input[lx->i] == 'e' || lx->input[lx->i] == 'E' ||
-                                   lx->input[lx->i] == '+' || lx->input[lx->i] == '-'))
+        int seen_dot = 0;
+        int seen_exp = 0;
+
+        while (lx->i < lx->len)
         {
-            if (j < sizeof(buf) - 1)
-                buf[j++] = lx->input[lx->i];
-            lx->i++;
+            char cc = lx->input[lx->i];
+            if (isdigit((unsigned char)cc))
+            {
+                if (j < sizeof(buf)-1) buf[j++] = cc;
+                lx->i++;
+                continue;
+            }
+            if ((cc == '.' ) && !seen_dot && !seen_exp)
+            {
+                seen_dot = 1;
+                if (j < sizeof(buf)-1) buf[j++] = cc;
+                lx->i++;
+                continue;
+            }
+            if ((cc == 'e' || cc == 'E') && !seen_exp)
+            {
+                seen_exp = 1;
+                if (j < sizeof(buf)-1) buf[j++] = cc;
+                lx->i++;
+                if (lx->i < lx->len && (lx->input[lx->i] == '+' || lx->input[lx->i] == '-'))
+                {
+                    if (j < sizeof(buf)-1) buf[j++] = lx->input[lx->i];
+                    lx->i++;
+                }
+                continue;
+            }
+            break;
         }
+
         buf[j] = '\0';
         t.kind = TK_NUM;
         t.num = strtod(buf, NULL);
@@ -253,8 +261,7 @@ static mp_token next_token(mp_lexer *lx)
         size_t j = 0;
         while (lx->i < lx->len && (isalnum((unsigned char)lx->input[lx->i]) || lx->input[lx->i] == '_'))
         {
-            if (j < sizeof(buf) - 1)
-                buf[j++] = lx->input[lx->i];
+            if (j < sizeof(buf)-1) buf[j++] = lx->input[lx->i];
             lx->i++;
         }
         buf[j] = '\0';
@@ -266,65 +273,31 @@ static mp_token next_token(mp_lexer *lx)
     lx->i++;
     switch (c)
     {
-    case '+':
-        t.kind = TK_PLUS;
-        break;
-    case '-':
-        t.kind = TK_MINUS;
-        break;
-    case '*':
-        t.kind = TK_STAR;
-        break;
-    case '/':
-        t.kind = TK_SLASH;
-        break;
-    case '%':
-        t.kind = TK_PERCENT;
-        break;
-    case '^':
-        t.kind = TK_CARET;
-        break;
-    case '(':
-        t.kind = TK_LPAREN;
-        break;
-    case ')':
-        t.kind = TK_RPAREN;
-        break;
-    case ',':
-        t.kind = TK_COMMA;
-        break;
-    case '=':
-        t.kind = TK_EQ;
-        break;
-    case ';':
-        t.kind = TK_SEMI;
-        break;
-    default:
-        t.kind = TK_END;
-        break;
+        case '+': t.kind = TK_PLUS; break;
+        case '-': t.kind = TK_MINUS; break;
+        case '*': t.kind = TK_STAR; break;
+        case '/': t.kind = TK_SLASH; break;
+        case '%': t.kind = TK_PERCENT; break;
+        case '^': t.kind = TK_CARET; break;
+        case '(': t.kind = TK_LPAREN; break;
+        case ')': t.kind = TK_RPAREN; break;
+        case ',': t.kind = TK_COMMA; break;
+        case '=': t.kind = TK_EQ; break;
+        case ';': t.kind = TK_SEMI; break;
+        default:  t.kind = TK_END; break;
     }
     return t;
 }
 
 static void advance(mp_parser *p) { p->cur = next_token(&p->lx); }
-static int accept(mp_parser *p, mp_tok_kind k)
-{
-    if (p->cur.kind == k)
-    {
-        advance(p);
-        return 1;
-    }
-    return 0;
-}
+static int accept(mp_parser *p, mp_tok_kind k) { if (p->cur.kind == k) { advance(p); return 1; } return 0; }
 
 /* ---------------- Context-backed variable & function table ---------------- */
 
 static int add_var(mp_context *ctx, const char *name, double value, int is_const)
 {
-    if (!ctx)
-        return 0;
+    if (!ctx) return 0;
 
-    /* Check for redefinition */
     for (size_t i = 0; i < ctx->n_vars; i++)
     {
         if (strcmp(ctx->vars[i].name, name) == 0)
@@ -333,7 +306,6 @@ static int add_var(mp_context *ctx, const char *name, double value, int is_const
             return 0;
         }
     }
-    /* Grow if needed */
     if (ctx->n_vars >= ctx->vars_capacity)
     {
         size_t new_cap = ctx->vars_capacity ? ctx->vars_capacity * 2 : 16;
@@ -360,8 +332,7 @@ int set_const(mp_context *ctx, const char *name, double value)
 
 int set_var(mp_context *ctx, const char *name, double value)
 {
-    if (!ctx)
-        return 0;
+    if (!ctx) return 0;
     for (size_t i = 0; i < ctx->n_vars; i++)
     {
         if (strcmp(ctx->vars[i].name, name) == 0)
@@ -380,8 +351,7 @@ int set_var(mp_context *ctx, const char *name, double value)
 
 static int lookup_var(mp_context *ctx, const char *name, double *out)
 {
-    if (!ctx)
-        return 0;
+    if (!ctx) return 0;
     for (size_t i = 0; i < ctx->n_vars; i++)
     {
         if (strcmp(ctx->vars[i].name, name) == 0)
@@ -393,13 +363,28 @@ static int lookup_var(mp_context *ctx, const char *name, double *out)
     return 0;
 }
 
+/* Remove a variable by name from the context (shifts array down). */
+static void remove_var(mp_context *ctx, const char *name)
+{
+    if (!ctx) return;
+    for (size_t i = 0; i < ctx->n_vars; ++i)
+    {
+        if (strcmp(ctx->vars[i].name, name) == 0)
+        {
+            for (size_t j = i + 1; j < ctx->n_vars; ++j)
+                ctx->vars[j - 1] = ctx->vars[j];
+            ctx->n_vars--;
+            return;
+        }
+    }
+}
+
 /* ---------------- Function table (context-backed) ---------------- */
 
 int define_func(mp_context *ctx, const char *name, const char params[][MAX_IDENT_LEN], int n_params,
                 const char *body_start, size_t body_len)
 {
-    if (!ctx)
-        return 0;
+    if (!ctx) return 0;
 
     if (n_params > MAX_FUNC_PARAMS)
     {
@@ -407,7 +392,6 @@ int define_func(mp_context *ctx, const char *name, const char params[][MAX_IDENT
         return 0;
     }
 
-    /* Make a copy of the body first */
     char *body_copy = malloc(body_len + 1);
     if (!body_copy)
     {
@@ -417,7 +401,6 @@ int define_func(mp_context *ctx, const char *name, const char params[][MAX_IDENT
     memcpy(body_copy, body_start, body_len);
     body_copy[body_len] = '\0';
 
-    /* Ensure capacity for the funcs array */
     if (ctx->n_funcs >= ctx->funcs_capacity)
     {
         size_t new_cap = ctx->funcs_capacity ? ctx->funcs_capacity * 2 : 16;
@@ -432,7 +415,6 @@ int define_func(mp_context *ctx, const char *name, const char params[][MAX_IDENT
         ctx->funcs_capacity = new_cap;
     }
 
-    /* Now append the new function */
     mp_func *f = &ctx->funcs[ctx->n_funcs++];
     snprintf(f->name, sizeof(f->name), "%s", name);
     f->n_params = n_params;
@@ -447,8 +429,7 @@ int define_func(mp_context *ctx, const char *name, const char params[][MAX_IDENT
 
 mp_func *lookup_func(mp_context *ctx, const char *name)
 {
-    if (!ctx)
-        return NULL;
+    if (!ctx) return NULL;
     for (size_t i = 0; i < ctx->n_funcs; i++)
     {
         if (strcmp(ctx->funcs[i].name, name) == 0)
@@ -469,10 +450,8 @@ static int double_cmp(const void *aa, const void *bb)
 
     if (a_nan || b_nan)
     {
-        if (a_nan && b_nan)
-            return 0;
-        if (a_nan)
-            return 1;
+        if (a_nan && b_nan) return 0;
+        if (a_nan) return 1;
         return -1;
     }
 
@@ -483,8 +462,7 @@ static int double_cmp(const void *aa, const void *bb)
 
 static double call_stat(const char *name, double *args, int n_args)
 {
-    if (n_args <= 0)
-        return NAN;
+    if (n_args <= 0) return NAN;
 
     double min_v = args[0], max_v = args[0];
     double sum = 0, prod = 1, sum_sq = 0;
@@ -492,10 +470,8 @@ static double call_stat(const char *name, double *args, int n_args)
     for (int i = 0; i < n_args; i++)
     {
         double v = args[i];
-        if (v < min_v)
-            min_v = v;
-        if (v > max_v)
-            max_v = v;
+        if (v < min_v) min_v = v;
+        if (v > max_v) max_v = v;
         sum += v;
         prod *= v;
         sum_sq += v * v;
@@ -516,8 +492,7 @@ static double call_stat(const char *name, double *args, int n_args)
 
     if (strcmp(name, "zscore") == 0)
     {
-        if (std_pop == 0)
-            return 0.0;
+        if (std_pop == 0) return 0.0;
         return (args[0] - mean) / std_pop;
     }
 
@@ -535,52 +510,32 @@ static double call_stat(const char *name, double *args, int n_args)
             int max_c = 1, cur_c = 1;
             for (int i = 1; i < n_args; i++)
             {
-                if (sorted[i] == sorted[i - 1])
-                    cur_c++;
+                if (sorted[i] == sorted[i - 1]) cur_c++;
                 else
                 {
-                    if (cur_c > max_c)
-                    {
-                        max_c = cur_c;
-                        mode_val = sorted[i - 1];
-                    }
+                    if (cur_c > max_c) { max_c = cur_c; mode_val = sorted[i - 1]; }
                     cur_c = 1;
                 }
             }
-            if (cur_c > max_c)
-                mode_val = sorted[n_args - 1];
+            if (cur_c > max_c) mode_val = sorted[n_args - 1];
             free(sorted);
         }
     }
 
-    if (strcmp(name, "min") == 0)
-        return min_v;
-    if (strcmp(name, "max") == 0)
-        return max_v;
-    if (strcmp(name, "sum") == 0)
-        return sum;
-    if (strcmp(name, "mean") == 0 || strcmp(name, "avg") == 0)
-        return mean;
-    if (strcmp(name, "rng") == 0)
-        return max_v - min_v;
-    if (strcmp(name, "mrng") == 0)
-        return (min_v + max_v) / 2.0;
-    if (strcmp(name, "std_err") == 0 || strcmp(name, "sem") == 0)
-        return std_sam / sqrt((double)n_args);
-    if (strcmp(name, "var") == 0 || strcmp(name, "pvar") == 0)
-        return var_pop;
-    if (strcmp(name, "std") == 0 || strcmp(name, "pstd") == 0)
-        return sqrt(var_pop);
-    if (strcmp(name, "svar") == 0)
-        return var_sam;
-    if (strcmp(name, "sstd") == 0)
-        return std_sam;
-    if (strcmp(name, "median") == 0 || strcmp(name, "med") == 0)
-        return median;
-    if (strcmp(name, "mode") == 0)
-        return mode_val;
-    if (strcmp(name, "rms") == 0)
-        return sqrt(sum_sq / n_args);
+    if (strcmp(name, "min") == 0) return min_v;
+    if (strcmp(name, "max") == 0) return max_v;
+    if (strcmp(name, "sum") == 0) return sum;
+    if (strcmp(name, "mean") == 0 || strcmp(name, "avg") == 0) return mean;
+    if (strcmp(name, "rng") == 0) return max_v - min_v;
+    if (strcmp(name, "mrng") == 0) return (min_v + max_v) / 2.0;
+    if (strcmp(name, "std_err") == 0 || strcmp(name, "sem") == 0) return std_sam / sqrt((double)n_args);
+    if (strcmp(name, "var") == 0 || strcmp(name, "pvar") == 0) return var_pop;
+    if (strcmp(name, "std") == 0 || strcmp(name, "pstd") == 0) return sqrt(var_pop);
+    if (strcmp(name, "svar") == 0) return var_sam;
+    if (strcmp(name, "sstd") == 0) return std_sam;
+    if (strcmp(name, "median") == 0 || strcmp(name, "med") == 0) return median;
+    if (strcmp(name, "mode") == 0) return mode_val;
+    if (strcmp(name, "rms") == 0) return sqrt(sum_sq / n_args);
 
     return NAN;
 }
@@ -589,66 +544,30 @@ static double call_stat(const char *name, double *args, int n_args)
 
 static double call_builtin(mp_context *ctx, const char *name, double *args, int n)
 {
-    /* zero-arg mode switchers */
     if (n == 0)
     {
-        if (strcasecmp(name, "DEG") == 0)
-        {
-            if (ctx)
-                ctx->trig_mode = MODE_DEG;
-            printf("Mode: DEG\n");
-            return NAN;
-        }
-        if (strcasecmp(name, "RAD") == 0)
-        {
-            if (ctx)
-                ctx->trig_mode = MODE_RAD;
-            printf("Mode: RAD\n");
-            return NAN;
-        }
-        if (strcasecmp(name, "GRAD") == 0)
-        {
-            if (ctx)
-                ctx->trig_mode = MODE_GRAD;
-            printf("Mode: GRAD\n");
-            return NAN;
-        }
-        if (strcasecmp(name, "MODE") == 0)
-        {
-            if (!ctx)
-            {
-                printf("Mode: ?\n");
-                return NAN;
-            }
-            const char *m = (ctx->trig_mode == MODE_DEG) ? "DEG" : (ctx->trig_mode == MODE_GRAD) ? "GRAD"
-                                                                                                 : "RAD";
-            printf("Mode: %s\n", m);
+        if (strcasecmp(name, "DEG") == 0) { if (ctx) ctx->trig_mode = MODE_DEG; if(!suppress_print) printf("Mode: DEG\n"); return NAN; }
+        if (strcasecmp(name, "RAD") == 0) { if (ctx) ctx->trig_mode = MODE_RAD; if(!suppress_print) printf("Mode: RAD\n"); return NAN; }
+        if (strcasecmp(name, "GRAD") == 0) { if (ctx) ctx->trig_mode = MODE_GRAD; if(!suppress_print) printf("Mode: GRAD\n"); return NAN; }
+        if (strcasecmp(name, "MODE") == 0) {
+            if (!ctx) { if(!suppress_print) printf("Mode: ?\n"); return NAN; }
+            const char *m = (ctx->trig_mode==MODE_DEG) ? "DEG" : (ctx->trig_mode==MODE_GRAD) ? "GRAD" : "RAD";
+            if(!suppress_print) printf("Mode: %s\n", m);
             return NAN;
         }
     }
 
     if (strcmp(name, "sin") == 0 && n == 1)
-        return sin((ctx ? (ctx->trig_mode == MODE_DEG ? args[0] * PI / 180.0 : ctx->trig_mode == MODE_GRAD ? args[0] * PI / 200.0
-                                                                                                           : args[0])
-                        : args[0]));
+        return sin((ctx ? (ctx->trig_mode==MODE_DEG ? args[0]*PI/180.0 : ctx->trig_mode==MODE_GRAD ? args[0]*PI/200.0 : args[0]) : args[0]));
     if (strcmp(name, "cos") == 0 && n == 1)
-        return cos((ctx ? (ctx->trig_mode == MODE_DEG ? args[0] * PI / 180.0 : ctx->trig_mode == MODE_GRAD ? args[0] * PI / 200.0
-                                                                                                           : args[0])
-                        : args[0]));
+        return cos((ctx ? (ctx->trig_mode==MODE_DEG ? args[0]*PI/180.0 : ctx->trig_mode==MODE_GRAD ? args[0]*PI/200.0 : args[0]) : args[0]));
     if (strcmp(name, "tan") == 0 && n == 1)
-        return tan((ctx ? (ctx->trig_mode == MODE_DEG ? args[0] * PI / 180.0 : ctx->trig_mode == MODE_GRAD ? args[0] * PI / 200.0
-                                                                                                           : args[0])
-                        : args[0]));
-    if (strcmp(name, "sqrt") == 0 && n == 1)
-        return sqrt(args[0]);
-    if (strcmp(name, "log") == 0 && n == 1)
-        return log(args[0]);
-    if (strcmp(name, "exp") == 0 && n == 1)
-        return exp(args[0]);
-    if (strcmp(name, "abs") == 0 && n == 1)
-        return fabs(args[0]);
-    if (strcmp(name, "pow") == 0 && n == 2)
-        return pow(args[0], args[1]);
+        return tan((ctx ? (ctx->trig_mode==MODE_DEG ? args[0]*PI/180.0 : ctx->trig_mode==MODE_GRAD ? args[0]*PI/200.0 : args[0]) : args[0]));
+    if (strcmp(name, "sqrt") == 0 && n == 1) return sqrt(args[0]);
+    if ( (strcmp(name, "log") == 0 || strcmp(name, "ln") == 0) && n == 1) return log(args[0]);
+    if (strcmp(name, "exp") == 0 && n == 1) return exp(args[0]);
+    if (strcmp(name, "abs") == 0 && n == 1) return fabs(args[0]);
+    if (strcmp(name, "pow") == 0 && n == 2) return pow(args[0], args[1]);
     return NAN;
 }
 
@@ -656,8 +575,7 @@ static double call_builtin(mp_context *ctx, const char *name, double *args, int 
 
 static mp_result call_user_func(mp_context *ctx, mp_func *f, double *args, int n)
 {
-    if (!ctx || !f)
-        return make_num(NAN);
+    if (!ctx || !f) return make_num(NAN);
 
     if (n != f->n_params)
     {
@@ -668,42 +586,58 @@ static mp_result call_user_func(mp_context *ctx, mp_func *f, double *args, int n
 
     double *oldvals = malloc(sizeof(double) * f->n_params);
     int *had_old = malloc(sizeof(int) * f->n_params);
-    if (!oldvals || !had_old)
+    int *new_param = malloc(sizeof(int) * f->n_params);
+    if (!oldvals || !had_old || !new_param)
     {
         fprintf(stderr, "Memory allocation failed in call_user_func\n");
-        free(oldvals);
-        free(had_old);
+        free(oldvals); free(had_old); free(new_param);
         return make_num(NAN);
     }
 
-    for (int i = 0; i < n; i++)
+    for (int i = 0; i < f->n_params; ++i)
     {
         had_old[i] = lookup_var(ctx, f->params[i], &oldvals[i]);
+        new_param[i] = 0;
+    }
+
+    for (int i = 0; i < n; ++i)
+    {
+        if (!had_old[i])
+            new_param[i] = 1;
         set_var(ctx, f->params[i], args[i]);
     }
 
-    /* Evaluate function body in a sub-parser using same ctx */
+    int old_suppress = suppress_print;
+    suppress_print = 1;
+
     mp_parser sub = {{f->body, 0, strlen(f->body)}, {0}, ctx};
     advance(&sub);
-    mp_result result = parse_expr(&sub);
+    double last_val = parse_program(&sub);
 
-    /* restore old variable values */
-    for (int i = 0; i < n; i++)
+    suppress_print = old_suppress;
+
+    mp_result result = make_num(last_val);
+
+    for (int i = 0; i < n; ++i)
     {
         if (had_old[i])
+        {
             set_var(ctx, f->params[i], oldvals[i]);
-        /* New parameters are left in context scope if they were newly added */
+        }
+        else if (new_param[i])
+        {
+            remove_var(ctx, f->params[i]);
+        }
     }
 
     free(oldvals);
     free(had_old);
+    free(new_param);
     return result;
 }
 
 /* ---------------- Parsing: primary / factor / term / expr ---------------- */
 
-/* Updated parse_primary: allow symbolic user-function calls by returning
-  a symbolic string "name(arg1,...)" instead of rejecting them. */
 static mp_result parse_primary(mp_parser *p)
 {
     mp_context *ctx = p->ctx;
@@ -721,28 +655,23 @@ static mp_result parse_primary(mp_parser *p)
         snprintf(name, sizeof(name), "%s", p->cur.ident);
         advance(p);
 
-        /* Special diff(...) */
         if (strcmp(name, "diff") == 0 && accept(p, TK_LPAREN))
         {
-            if (ctx)
-                ctx->symbolic_mode = 1;
+            if (ctx) ctx->symbolic_mode = 1;
             mp_result inner = parse_expr(p);
-            if (ctx)
-                ctx->symbolic_mode = 0;
+            if (ctx) ctx->symbolic_mode = 0;
 
             if (!accept(p, TK_COMMA))
             {
                 fprintf(stderr, "Expected ',' in diff()\n");
-                if (inner.type == RES_STR)
-                    free(inner.str);
+                if (inner.type == RES_STR) free(inner.str);
                 return make_num(NAN);
             }
 
             if (p->cur.kind != TK_IDENT)
             {
                 fprintf(stderr, "Expected variable name after ',' in diff()\n");
-                if (inner.type == RES_STR)
-                    free(inner.str);
+                if (inner.type == RES_STR) free(inner.str);
                 return make_num(NAN);
             }
             char var[MAX_IDENT_LEN];
@@ -751,24 +680,19 @@ static mp_result parse_primary(mp_parser *p)
 
             if (accept(p, TK_COMMA))
             {
-                /* numeric evaluation at point */
                 mp_result point = parse_expr(p);
                 if (!accept(p, TK_RPAREN))
                 {
                     fprintf(stderr, "Expected ')' in diff()\n");
-                    if (inner.type == RES_STR)
-                        free(inner.str);
-                    if (point.type == RES_STR)
-                        free(point.str);
+                    if (inner.type == RES_STR) free(inner.str);
+                    if (point.type == RES_STR) free(point.str);
                     return make_num(NAN);
                 }
                 if (point.type != RES_NUM)
                 {
                     fprintf(stderr, "Evaluation point must be numeric\n");
-                    if (inner.type == RES_STR)
-                        free(inner.str);
-                    if (point.type == RES_STR)
-                        free(point.str);
+                    if (inner.type == RES_STR) free(inner.str);
+                    if (point.type == RES_STR) free(point.str);
                     return make_num(NAN);
                 }
 
@@ -780,8 +704,7 @@ static mp_result parse_primary(mp_parser *p)
                     deriv_str = diff_expr(expr_str, var);
 
                 free(expr_str);
-                if (inner.type == RES_STR)
-                    free(inner.str);
+                if (inner.type == RES_STR) free(inner.str);
 
                 double old_val = 0.0;
                 int had_var = 0;
@@ -799,6 +722,8 @@ static mp_result parse_primary(mp_parser *p)
                 {
                     if (had_var)
                         set_var(ctx, var, old_val);
+                    else
+                        remove_var(ctx, var);
                 }
 
                 free(deriv_str);
@@ -806,12 +731,10 @@ static mp_result parse_primary(mp_parser *p)
             }
             else
             {
-                /* symbolic */
                 if (!accept(p, TK_RPAREN))
                 {
                     fprintf(stderr, "Expected ')' in diff()\n");
-                    if (inner.type == RES_STR)
-                        free(inner.str);
+                    if (inner.type == RES_STR) free(inner.str);
                     return make_num(NAN);
                 }
 
@@ -823,14 +746,12 @@ static mp_result parse_primary(mp_parser *p)
                     deriv_str = diff_expr(expr_str, var);
 
                 free(expr_str);
-                if (inner.type == RES_STR)
-                    free(inner.str);
+                if (inner.type == RES_STR) free(inner.str);
 
                 return make_str(deriv_str);
             }
         }
 
-        /* Function call */
         if (accept(p, TK_LPAREN))
         {
             mp_result *args = NULL;
@@ -844,9 +765,7 @@ static mp_result parse_primary(mp_parser *p)
                     if (!tmp)
                     {
                         fprintf(stderr, "Memory allocation failed while parsing arguments\n");
-                        for (int j = 0; j < n_args; ++j)
-                            if (args[j].type == RES_STR)
-                                free(args[j].str);
+                        for (int j = 0; j < n_args; ++j) if (args[j].type == RES_STR) free(args[j].str);
                         free(args);
                         return make_num(NAN);
                     }
@@ -856,20 +775,15 @@ static mp_result parse_primary(mp_parser *p)
                 if (!accept(p, TK_RPAREN))
                 {
                     fprintf(stderr, "Missing ')' in function call\n");
-                    for (int j = 0; j < n_args; ++j)
-                        if (args[j].type == RES_STR)
-                            free(args[j].str);
+                    for (int j = 0; j < n_args; ++j) if (args[j].type == RES_STR) free(args[j].str);
                     free(args);
                     return make_num(NAN);
                 }
             }
 
             int all_numeric = 1;
-            for (int i = 0; i < n_args; i++)
-                if (args[i].type != RES_NUM)
-                    all_numeric = 0;
+            for (int i = 0; i < n_args; i++) if (args[i].type != RES_NUM) all_numeric = 0;
 
-            /* Prepare arg strings / numeric array */
             char **arg_strs = NULL;
             double *num_args = NULL;
             if (n_args > 0)
@@ -879,9 +793,7 @@ static mp_result parse_primary(mp_parser *p)
                 if (!arg_strs || !num_args)
                 {
                     fprintf(stderr, "Memory allocation failed for function call args\n");
-                    for (int j = 0; j < n_args; ++j)
-                        if (args[j].type == RES_STR)
-                            free(args[j].str);
+                    for (int j = 0; j < n_args; ++j) if (args[j].type == RES_STR) free(args[j].str);
                     free(args);
                     free(arg_strs);
                     free(num_args);
@@ -902,7 +814,6 @@ static mp_result parse_primary(mp_parser *p)
                 }
             }
 
-            /* Lookup user function in explicit context */
             mp_func *uf = lookup_func(ctx, name);
             if (uf)
             {
@@ -912,59 +823,42 @@ static mp_result parse_primary(mp_parser *p)
                     if (!call_args)
                     {
                         fprintf(stderr, "Memory allocation failed for call_args\n");
-                        for (int i = 0; i < n_args; i++)
-                            free(arg_strs[i]);
-                        free(arg_strs);
-                        free(num_args);
-                        for (int i = 0; i < n_args; ++i)
-                            if (args[i].type == RES_STR)
-                                free(args[i].str);
+                        for (int i = 0; i < n_args; i++) free(arg_strs[i]);
+                        free(arg_strs); free(num_args);
+                        for (int i = 0; i < n_args; ++i) if (args[i].type == RES_STR) free(args[i].str);
                         free(args);
                         return make_num(NAN);
                     }
-                    for (int i = 0; i < n_args; i++)
-                        call_args[i] = num_args[i];
+                    for (int i = 0; i < n_args; i++) call_args[i] = num_args[i];
 
-                    mp_result res2 = call_user_func(ctx, uf, call_args, n_args);
+                    mp_result res = call_user_func(ctx, uf, call_args, n_args);
                     free(call_args);
 
-                    for (int i = 0; i < n_args; i++)
-                        free(arg_strs[i]);
-                    free(arg_strs);
-                    free(num_args);
-                    for (int i = 0; i < n_args; ++i)
-                        if (args[i].type == RES_STR)
-                            free(args[i].str);
+                    for (int i = 0; i < n_args; i++) free(arg_strs[i]);
+                    free(arg_strs); free(num_args);
+                    for (int i = 0; i < n_args; ++i) if (args[i].type == RES_STR) free(args[i].str);
                     free(args);
 
-                    return res2;
+                    return res;
                 }
                 else
                 {
-                    /* Symbolic: build "name(arg1,arg2,...)" and return it as symbolic string.
-                       This allows diff_expr_ctx to later parse and expand user functions. */
                     size_t len = strlen(name) + 3;
-                    for (int i = 0; i < n_args; i++)
-                        len += strlen(arg_strs[i]) + (i > 0 ? 2 : 0);
+                    for (int i = 0; i < n_args; i++) len += strlen(arg_strs[i]) + (i > 0 ? 2 : 0);
                     char *combined = malloc(len);
                     if (!combined)
                     {
                         fprintf(stderr, "Memory allocation failed for symbolic user function\n");
-                        for (int i = 0; i < n_args; i++)
-                            free(arg_strs[i]);
-                        free(arg_strs);
-                        free(num_args);
-                        for (int i = 0; i < n_args; ++i)
-                            if (args[i].type == RES_STR)
-                                free(args[i].str);
+                        for (int i = 0; i < n_args; i++) free(arg_strs[i]);
+                        free(arg_strs); free(num_args);
+                        for (int i = 0; i < n_args; ++i) if (args[i].type == RES_STR) free(args[i].str);
                         free(args);
                         return make_num(NAN);
                     }
                     snprintf(combined, len, "%s(", name);
                     for (int i = 0; i < n_args; i++)
                     {
-                        if (i > 0)
-                            strcat(combined, ", ");
+                        if (i > 0) strcat(combined, ", ");
                         strcat(combined, arg_strs[i]);
                     }
                     strcat(combined, ")");
@@ -972,8 +866,7 @@ static mp_result parse_primary(mp_parser *p)
                     for (int i = 0; i < n_args; i++)
                     {
                         free(arg_strs[i]);
-                        if (args[i].type == RES_STR)
-                            free(args[i].str);
+                        if (args[i].type == RES_STR) free(args[i].str);
                     }
                     free(arg_strs);
                     free(num_args);
@@ -983,84 +876,62 @@ static mp_result parse_primary(mp_parser *p)
                 }
             }
 
-            /* Not a user function (or no ctx): treat same as before for builtins/statistics/symbolic fallback */
-
             if (all_numeric)
             {
                 double *call_args = malloc(sizeof(double) * n_args);
                 if (!call_args)
                 {
                     fprintf(stderr, "Memory allocation failed for call_args\n");
-                    for (int i = 0; i < n_args; i++)
-                        free(arg_strs[i]);
-                    free(arg_strs);
-                    free(num_args);
-                    for (int i = 0; i < n_args; ++i)
-                        if (args[i].type == RES_STR)
-                            free(args[i].str);
+                    for (int i = 0; i < n_args; i++) free(arg_strs[i]);
+                    free(arg_strs); free(num_args);
+                    for (int i = 0; i < n_args; ++i) if (args[i].type == RES_STR) free(args[i].str);
                     free(args);
                     return make_num(NAN);
                 }
-                for (int i = 0; i < n_args; i++)
-                    call_args[i] = num_args[i];
+                for (int i = 0; i < n_args; i++) call_args[i] = num_args[i];
 
                 double val = call_builtin(ctx, name, call_args, n_args);
-                if (isnan(val))
-                    val = call_stat(name, call_args, n_args);
+                if (isnan(val)) val = call_stat(name, call_args, n_args);
 
                 free(call_args);
-                for (int i = 0; i < n_args; i++)
-                    free(arg_strs[i]);
-                free(arg_strs);
-                free(num_args);
-                for (int i = 0; i < n_args; ++i)
-                    if (args[i].type == RES_STR)
-                        free(args[i].str);
+                for (int i = 0; i < n_args; i++) free(arg_strs[i]);
+                free(arg_strs); free(num_args);
+                for (int i = 0; i < n_args; ++i) if (args[i].type == RES_STR) free(args[i].str);
                 free(args);
 
-                if (!isnan(val))
-                    return make_num(val);
+                if (!isnan(val)) return make_num(val);
             }
 
-            /* Symbolic fallback for non-user functions */
-            size_t len = strlen(name) + 3;
-            for (int i = 0; i < n_args; i++)
-                len += strlen(arg_strs[i]) + (i > 0 ? 2 : 0);
-            char *combined = malloc(len);
-            if (!combined)
             {
-                fprintf(stderr, "Memory allocation failed for symbolic fallback\n");
+                size_t len = strlen(name) + 3;
+                for (int i = 0; i < n_args; i++) len += strlen(arg_strs[i]) + (i > 0 ? 2 : 0);
+                char *combined = malloc(len);
+                if (!combined)
+                {
+                    fprintf(stderr, "Memory allocation failed for symbolic fallback\n");
+                    for (int i = 0; i < n_args; i++) free(arg_strs[i]);
+                    free(arg_strs); free(num_args);
+                    for (int i = 0; i < n_args; ++i) if (args[i].type == RES_STR) free(args[i].str);
+                    free(args);
+                    return make_num(NAN);
+                }
+                snprintf(combined, len, "%s(", name);
                 for (int i = 0; i < n_args; i++)
+                {
+                    if (i > 0) strcat(combined, ", ");
+                    strcat(combined, arg_strs[i]);
+                }
+                strcat(combined, ")");
+                for (int i = 0; i < n_args; i++)
+                {
                     free(arg_strs[i]);
-                free(arg_strs);
-                free(num_args);
-                for (int i = 0; i < n_args; ++i)
-                    if (args[i].type == RES_STR)
-                        free(args[i].str);
-                free(args);
-                return make_num(NAN);
+                    if (args[i].type == RES_STR) free(args[i].str);
+                }
+                free(arg_strs); free(num_args); free(args);
+                return make_str(combined);
             }
-            snprintf(combined, len, "%s(", name);
-            for (int i = 0; i < n_args; i++)
-            {
-                if (i > 0)
-                    strcat(combined, ", ");
-                strcat(combined, arg_strs[i]);
-            }
-            strcat(combined, ")");
-            for (int i = 0; i < n_args; i++)
-            {
-                free(arg_strs[i]);
-                if (args[i].type == RES_STR)
-                    free(args[i].str);
-            }
-            free(arg_strs);
-            free(num_args);
-            free(args);
-            return make_str(combined);
         }
 
-        /* Plain identifier */
         if (ctx && ctx->symbolic_mode)
             return make_str(name);
 
@@ -1072,20 +943,17 @@ static mp_result parse_primary(mp_parser *p)
         return make_num(NAN);
     }
 
-    /* parenthesized expression */
     if (accept(p, TK_LPAREN))
     {
         mp_result r = parse_expr(p);
-        if (!accept(p, TK_RPAREN))
-            fprintf(stderr, "Missing ')'\n");
+        if (!accept(p, TK_RPAREN)) fprintf(stderr, "Missing ')'\n");
         return r;
     }
 
     if (accept(p, TK_MINUS))
     {
         mp_result r = parse_primary(p);
-        if (r.type == RES_NUM)
-            r.num = -r.num;
+        if (r.type == RES_NUM) r.num = -r.num;
         else
         {
             char *s = malloc(strlen(r.str) + 4);
@@ -1110,7 +978,6 @@ static mp_result parse_factor(mp_parser *p)
     {
         mp_result rhs = parse_factor(p);
         v = pow_result(v, rhs);
-        printf("v.num after pow_result: %f\n", v.num);
     }
     return v;
 }
@@ -1123,12 +990,9 @@ static mp_result parse_term(mp_parser *p)
         mp_tok_kind op = p->cur.kind;
         advance(p);
         mp_result rhs = parse_factor(p);
-        if (op == TK_STAR)
-            v = mul(v, rhs);
-        else if (op == TK_SLASH)
-            v = divide(v, rhs);
-        else
-            v = mod_result(v, rhs);
+        if (op == TK_STAR) v = mul(v, rhs);
+        else if (op == TK_SLASH) v = divide(v, rhs);
+        else v = mod_result(v, rhs);
     }
     return v;
 }
@@ -1213,17 +1077,12 @@ static int parse_func_def(mp_parser *p, const char *fname)
 
 /* ---------------- Statement ---------------- */
 
-typedef enum
-{
-    STMT_VALUE,
-    STMT_DEFINITION,
-    STMT_ERROR
-} StmtResultKind;
-typedef struct
-{
-    StmtResultKind kind;
-    double value;
-} StmtResult;
+typedef enum { STMT_VALUE, STMT_DEFINITION, STMT_ERROR } StmtResultKind;
+typedef struct { StmtResultKind kind; double value; } StmtResult;
+
+/* parse_statement defined earlier used by parse_program */
+
+static StmtResult parse_statement(mp_parser *p); /* forward declaration used above */
 
 static StmtResult parse_statement(mp_parser *p)
 {
@@ -1235,17 +1094,14 @@ static StmtResult parse_statement(mp_parser *p)
         char name[MAX_IDENT_LEN];
         snprintf(name, sizeof(name), "%s", p->cur.ident);
 
-        /* Save state before consuming the identifier so we can restore later */
         size_t save_pre_i = p->lx.i;
         mp_token save_pre_cur = p->cur;
 
-        /* Consume the identifier; p->cur is now the token after the name */
         advance(p);
 
-        /* --- Assignment? (IDENT = expr) --- */
         if (p->cur.kind == TK_EQ)
         {
-            advance(p); /* consume '=' */
+            advance(p);
             mp_result val = parse_expr(p);
             if (val.type == RES_NUM && !isnan(val.num))
             {
@@ -1264,16 +1120,13 @@ static StmtResult parse_statement(mp_parser *p)
             return res;
         }
 
-        /* --- Possible function definition? (IDENT ( ... ) = ...) --- */
         if (p->cur.kind == TK_LPAREN)
         {
-            /* Save the state immediately after the identifier (so we can call parse_func_def from that state) */
             size_t save_after_i = p->lx.i;
             mp_token save_after_cur = p->cur;
 
-            /* Lookahead to find matching ')' and check for '=' after it */
             int paren_depth = 1;
-            advance(p); /* consume '(' for lookahead */
+            advance(p);
             while (paren_depth > 0 && p->cur.kind != TK_END)
             {
                 if (p->cur.kind == TK_LPAREN)
@@ -1285,7 +1138,6 @@ static StmtResult parse_statement(mp_parser *p)
 
             int is_definition = (paren_depth == 0 && p->cur.kind == TK_EQ);
 
-            /* Restore to the state immediately after the identifier so parse_func_def can be invoked */
             p->lx.i = save_after_i;
             p->cur = save_after_cur;
 
@@ -1299,11 +1151,8 @@ static StmtResult parse_statement(mp_parser *p)
                 fprintf(stderr, "Invalid function definition for %s\n", name);
                 return res;
             }
-
-            /* Not a definition — fall through to check other cases / restore below */
         }
 
-        /* --- df(src, wrt) at statement level (create derivative function) --- */
         if (strcmp(name, "df") == 0 && accept(p, TK_LPAREN))
         {
             if (p->cur.kind == TK_IDENT)
@@ -1335,15 +1184,12 @@ static StmtResult parse_statement(mp_parser *p)
                     }
                 }
             }
-            /* If df(...) didn't succeed, fall through to restore and parse normally */
         }
 
-        /* Not assignment/definition/df -> restore to pre-identifier state so expression parsing starts with the IDENT token */
         p->lx.i = save_pre_i;
         p->cur = save_pre_cur;
     }
 
-    /* Parse the expression (now starts correctly with IDENT or other token) */
     mp_result v = parse_expr(p);
 
     if (v.type == RES_NUM && !isnan(v.num))
@@ -1353,11 +1199,10 @@ static StmtResult parse_statement(mp_parser *p)
     }
     else if (v.type == RES_STR)
     {
-        printf("%s\n", v.str);
+        if (!suppress_print) printf("%s\n", v.str);
         free(v.str);
     }
 
-    /* Recovery on error: skip to semicolon/end */
     if ((v.type == RES_NUM && isnan(v.num)) || (v.type == RES_STR && v.str == NULL))
     {
         while (p->cur.kind != TK_SEMI && p->cur.kind != TK_END)
@@ -1373,8 +1218,7 @@ static StmtResult parse_statement(mp_parser *p)
 
 void init_constants(mp_context *ctx)
 {
-    if (!ctx)
-        return;
+    if (!ctx) return;
     set_const(ctx, "pi", PI);
     set_const(ctx, "e", 2.71828182845904523536);
     set_const(ctx, "c", 299792458.0);
@@ -1387,8 +1231,7 @@ void init_constants(mp_context *ctx)
 static double parse_program(mp_parser *p)
 {
     mp_context *ctx = p->ctx;
-    if (!ctx)
-        return 0.0;
+    if (!ctx) return 0.0;
 
     if (!ctx->constants_initialized)
     {
@@ -1407,20 +1250,19 @@ static double parse_program(mp_parser *p)
 
         size_t len = stmt_end - stmt_start;
         char stmt[256];
-        if (len >= sizeof(stmt))
-            len = sizeof(stmt) - 1;
+        if (len >= sizeof(stmt)) len = sizeof(stmt) - 1;
         memcpy(stmt, p->lx.input + stmt_start, len);
         stmt[len] = '\0';
 
         if (r.kind == STMT_VALUE)
         {
-            printf("%s => %.17g\n", stmt, r.value);
+            if (!suppress_print) printf("%s => %.17g\n", stmt, r.value);
             last_value = r.value;
             has_value = 1;
         }
         else if (r.kind == STMT_DEFINITION)
         {
-            printf("%s => function defined\n", stmt);
+            if (!suppress_print) printf("%s => function defined\n", stmt);
         }
 
         accept(p, TK_SEMI);
@@ -1431,12 +1273,10 @@ static double parse_program(mp_parser *p)
 
 /* ---------------- Context management & exec API (v4.1) ---------------- */
 
-/* Create a new context on the heap. Caller must call ctx_destroy(). */
-mp_context *ctx_create(void)
+mp_context* ctx_create(void)
 {
-    mp_context *ctx = (mp_context *)calloc(1, sizeof(mp_context));
-    if (!ctx)
-        return NULL;
+    mp_context *ctx = (mp_context*)calloc(1, sizeof(mp_context));
+    if (!ctx) return NULL;
     ctx->vars = NULL;
     ctx->n_vars = 0;
     ctx->vars_capacity = 0;
@@ -1444,18 +1284,14 @@ mp_context *ctx_create(void)
     ctx->n_funcs = 0;
     ctx->funcs_capacity = 0;
     ctx->symbolic_mode = 0;
-    ctx->trig_mode = MODE_RAD; /* fallback if MODE_RAD unknown — but we'll set below properly */
-    /* set default trig mode */
     ctx->trig_mode = MODE_RAD;
     ctx->constants_initialized = 0;
     return ctx;
 }
 
-/* Destroy a context and free all resources. Safe to call with NULL. */
 void ctx_destroy(mp_context *ctx)
 {
-    if (!ctx)
-        return;
+    if (!ctx) return;
     for (size_t i = 0; i < ctx->n_funcs; ++i)
         free(ctx->funcs[i].body);
     free(ctx->funcs);
@@ -1471,28 +1307,24 @@ void ctx_destroy(mp_context *ctx)
     free(ctx);
 }
 
-/* Execute a script using an existing context. Does not destroy the context. */
 double exec_with_ctx(mp_context *ctx, const char *script)
 {
-    if (!ctx || !script)
-        return 0.0;
+    if (!ctx || !script) return 0.0;
     mp_parser p = {{script, 0, strlen(script)}, {0}, ctx};
     advance(&p);
     return parse_program(&p);
 }
 
-/* The original convenience exec() uses a temporary heap context now. */
 double exec(const char *script)
 {
     mp_context *ctx = ctx_create();
-    if (!ctx)
-        return 0.0;
+    if (!ctx) return 0.0;
     double res = exec_with_ctx(ctx, script);
     ctx_destroy(ctx);
     return res;
 }
 
-/* ---------------- Demo ---------------- */
+/* ---------------- Demo main ---------------- */
 
 int main(void)
 {
@@ -1508,9 +1340,9 @@ int main(void)
         "sin(21);"
         "GRAD();"
         "sin(21);"
+        "28*ln(32)+sum(3,5,7,9,sin(pi/2),12);"
         "MODE();"
         "f(2,5);"
-        "sum(3,5,7,9,sin(pi/2),12);"
         "4%3;"
         "10%3;"
         "(13%9)+2^(5%3);"
@@ -1519,26 +1351,15 @@ int main(void)
         "sin(pi/2);"
         "g(x)=x^3-2*x+1;"
         "g(3);"
-        "diff(g(x), x);"
-        "diff(sin(x^2-3*x-2), x);"
-        "diff(diff(sin(x), x), x);"
+        "diff(g(x)-sin(x), x);"
+        "diff(g(x),x, 3);"
+        "diff(sin(x^3-3*x-2), x);"
+        "diff(diff(sin(x^3), x), x);"
         "diff(diff(diff(sin(x), x), x), x);"
         "diff(sin(x), x, pi);";
 
     printf("Input program:\n%s\n\n", script);
-
-    /* Convenience one-shot execution (context created and destroyed internally) */
     double result = exec(script);
     printf("\nLast evaluated value: %.17g\n", result);
-
-    /* Example of reusing a context across multiple scripts (caller-managed context) */
-    mp_context *shared_ctx = ctx_create();
-    if (shared_ctx)
-    {
-        exec_with_ctx(shared_ctx, "x=5; y=2; x+y;");
-        exec_with_ctx(shared_ctx, "f(a)=a^2; f(3);");
-        ctx_destroy(shared_ctx);
-    }
-
     return 0;
 }
