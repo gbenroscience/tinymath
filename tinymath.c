@@ -459,8 +459,7 @@ static int double_cmp(const void *aa, const void *bb)
 }
 
 /* ---------------- Statistical functions (variable arity) ---------------- */
-
-static double call_stat(const char *name, double *args, int n_args)
+ static double call_stat(const char *name, double *args, int n_args)
 {
     if (n_args <= 0) return NAN;
 
@@ -494,6 +493,14 @@ static double call_stat(const char *name, double *args, int n_args)
     {
         if (std_pop == 0) return 0.0;
         return (args[0] - mean) / std_pop;
+    }
+
+    /* Coefficient of variation (CV): population std dev / |mean|
+       Recognize both "cov" and "cv" as synonyms here. */
+    if (strcmp(name, "cov") == 0 || strcmp(name, "cv") == 0)
+    {
+        if (mean == 0.0) return NAN;
+        return std_pop / fabs(mean);
     }
 
     double median = NAN, mode_val = NAN;
@@ -539,7 +546,6 @@ static double call_stat(const char *name, double *args, int n_args)
 
     return NAN;
 }
-
 /* ---------------- Built-in functions (accept ctx for trig mode side-effects) ---------------- */
 
 static double call_builtin(mp_context *ctx, const char *name, double *args, int n)
