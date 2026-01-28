@@ -1,5 +1,5 @@
 /*
- * tinymath.c (v4.1a, cleaned)
+ * tinymath.c
  *
  * Full parser with explicit mp_context, ctx_create/ctx_destroy/exec_with_ctx,
  * caller-side suppression of printing during function evaluation, correct
@@ -25,7 +25,7 @@
    evaluation results. We temporarily set it while evaluating a function body. */
 static int suppress_print = 0;
 
-/* Local constant for pi */
+// Local constant for pi
 static const double PI = 3.14159265358979323846;
 typedef enum
 {
@@ -33,14 +33,14 @@ typedef enum
     MODE_DEG,
     MODE_GRAD
 } trig_mode_t;
-/* ---------------- Dynamic Variable Table ---------------- */
+// Dynamic Variable Table
 typedef struct
 {
     char name[MAX_IDENT_LEN];
     double value;
     int is_const; // 1 = constant, 0 = normal variable
 } mp_var;
-/* ---------------- Execution Context ---------------- */
+//Execution Context
 
 struct mp_context
 {
@@ -58,7 +58,7 @@ struct mp_context
     int constants_initialized;
 };
 
-/* ---------------- Lexer / Parser types ---------------- */
+// Lexer / Parser types
 
 typedef enum
 {
@@ -99,8 +99,7 @@ typedef struct
     mp_context *ctx; /* explicit context pointer */
 } mp_parser;
 
-/* ---------------- Result type ---------------- */
-
+// Result type
 typedef enum { RES_NUM, RES_STR } ResultType;
 
 typedef struct
@@ -110,7 +109,7 @@ typedef struct
     char *str;
 } mp_result;
 
-/* ------------------ Helpers ------------------ */
+// Helpers
 
 static mp_result make_num(double v) { mp_result r = {RES_NUM, v, NULL}; return r; }
 static mp_result make_str(const char *s) { mp_result r = {RES_STR, NAN, strdup(s)}; return r; }
@@ -132,7 +131,7 @@ static char *concat3(const char *a, const char *b, const char *c)
 }
 
 
-/* ---------------- Forward declarations ---------------- */
+// Forward declarations
 
 static mp_result parse_term(mp_parser *p);
 static mp_result parse_factor(mp_parser *p);
@@ -140,7 +139,7 @@ static mp_result parse_primary(mp_parser *p);
 static mp_result parse_expr(mp_parser *p);
 static double parse_program(mp_parser *p);
 
-/* Binary ops (symbolic-aware) */
+// Binary ops (symbolic-aware)
 #define DEFINE_BINOP_EXT(name, opstr, numeric_expr)                               \
     static mp_result name(mp_result a, mp_result b)                               \
     {                                                                             \
@@ -174,8 +173,7 @@ DEFINE_BINOP_EXT(divide, " / ", a.num / b.num)
 DEFINE_BINOP_EXT(mod_result, " % ", fmod(a.num, b.num))
 DEFINE_BINOP_EXT(pow_result, "^", pow(a.num, b.num))
 
-/* ---------------- Lexer ---------------- */
-
+// Lexer
 static void skip_ws(mp_lexer *lx)
 {
     for (;;)
@@ -292,7 +290,7 @@ static mp_token next_token(mp_lexer *lx)
 static void advance(mp_parser *p) { p->cur = next_token(&p->lx); }
 static int accept(mp_parser *p, mp_tok_kind k) { if (p->cur.kind == k) { advance(p); return 1; } return 0; }
 
-/* ---------------- Context-backed variable & function table ---------------- */
+// Context-backed variable & function table
 
 static int add_var(mp_context *ctx, const char *name, double value, int is_const)
 {
@@ -363,7 +361,7 @@ static int lookup_var(mp_context *ctx, const char *name, double *out)
     return 0;
 }
 
-/* Remove a variable by name from the context (shifts array down). */
+// Remove a variable by name from the context (shifts array down)
 static void remove_var(mp_context *ctx, const char *name)
 {
     if (!ctx) return;
@@ -379,7 +377,7 @@ static void remove_var(mp_context *ctx, const char *name)
     }
 }
 
-/* ---------------- Function table (context-backed) ---------------- */
+// Function table (context-backed)
 
 int define_func(mp_context *ctx, const char *name, const char params[][MAX_IDENT_LEN], int n_params,
                 const char *body_start, size_t body_len)
@@ -438,7 +436,7 @@ mp_func *lookup_func(mp_context *ctx, const char *name)
     return NULL;
 }
 
-/* ---------------- Sorting helper ---------------- */
+//Sorting helper
 
 static int double_cmp(const void *aa, const void *bb)
 {
@@ -458,7 +456,7 @@ static int double_cmp(const void *aa, const void *bb)
     return (a > b) - (a < b);
 }
 
-/* ---------------- Statistical functions (variable arity) ---------------- */
+//Statistical functions
  static double call_stat(const char *name, double *args, int n_args)
 {
     if (n_args <= 0) return NAN;
@@ -577,7 +575,7 @@ static double call_builtin(mp_context *ctx, const char *name, double *args, int 
     return NAN;
 }
 
-/* ---------------- call_user_func ---------------- */
+// call_user_func
 
 static mp_result call_user_func(mp_context *ctx, mp_func *f, double *args, int n)
 {
@@ -642,8 +640,7 @@ static mp_result call_user_func(mp_context *ctx, mp_func *f, double *args, int n
     return result;
 }
 
-/* ---------------- Parsing: primary / factor / term / expr ---------------- */
-
+// Parsing: primary / factor / term / expr
 static mp_result parse_primary(mp_parser *p)
 {
     mp_context *ctx = p->ctx;
@@ -1016,7 +1013,7 @@ static mp_result parse_expr(mp_parser *p)
     return v;
 }
 
-/* ---------------- Function definition parsing ---------------- */
+// Function definition parsing
 
 static int parse_func_def(mp_parser *p, const char *fname)
 {
@@ -1081,7 +1078,7 @@ static int parse_func_def(mp_parser *p, const char *fname)
     return define_func(ctx, fname, params, n_params, p->lx.input + body_start_idx, body_len);
 }
 
-/* ---------------- Statement ---------------- */
+// Statement
 
 typedef enum { STMT_VALUE, STMT_DEFINITION, STMT_ERROR } StmtResultKind;
 typedef struct { StmtResultKind kind; double value; } StmtResult;
@@ -1220,7 +1217,7 @@ static StmtResult parse_statement(mp_parser *p)
     return res;
 }
 
-/* ---------------- Constants & program parsing ---------------- */
+// Constants & program parsing
 
 void init_constants(mp_context *ctx)
 {
@@ -1277,7 +1274,7 @@ static double parse_program(mp_parser *p)
     return has_value ? last_value : 0.0;
 }
 
-/* ---------------- Context management & exec API (v4.1) ---------------- */
+// Context management & exec API
 
 mp_context* ctx_create(void)
 {
@@ -1330,8 +1327,7 @@ double exec(const char *script)
     return res;
 }
 
-/* ---------------- Demo main ---------------- */
-/* Replace your existing main with this one (or adapt it) */
+// Demo main
 int main(int argc, char **argv)
 {
     const char *script = NULL;
