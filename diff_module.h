@@ -21,8 +21,7 @@
 #include <math.h>
 #include "parser_api.h"
 
-/* ---------- AST ---------- */
-
+// AST
 typedef enum { N_NUM, N_VAR, N_OP, N_FUNC } NodeType;
 
 typedef struct Node {
@@ -35,7 +34,7 @@ typedef struct Node {
     int n_args;
 } Node;
 
-/* Node constructors / helpers (allocate and initialize) */
+// Node constructors / helpers (allocate and initialize)
 
 static Node* nd_alloc(void) {
     Node *n = (Node*)calloc(1, sizeof(Node));
@@ -65,7 +64,7 @@ static Node* nd_op(char op, Node* a, Node* b) {
     return n;
 }
 
-/* Create a function node with given name and argument list */
+// Create a function node with given name and argument list 
 static Node* nd_func_n(const char* f, Node** argv, int n_args) {
     Node* n = nd_alloc();
     n->type = N_FUNC;
@@ -80,7 +79,7 @@ static Node* nd_func_n(const char* f, Node** argv, int n_args) {
     return n;
 }
 
-/* Convenience single-arg and two-arg factories */
+// Convenience single-arg and two-arg factories
 static Node* nd_func(const char* f, Node* x) {
     Node* argv[1] = { x };
     return nd_func_n(f, argv, 1);
@@ -91,7 +90,7 @@ static Node* nd_pow(Node* u, Node* v) {
     return nd_func_n("pow", argv, 2);
 }
 
-/* Deep copy and free helpers */
+// Deep copy and free helpers
 
 static Node* nd_copy(Node* n) {
     if (!n) return NULL;
@@ -129,7 +128,7 @@ static void nd_free(Node* n) {
     free(n);
 }
 
-/* ---------- Tiny parser to AST (expr subset) ---------- */
+// Tiny parser to AST (expr subset) 
 
 typedef struct { const char* s; size_t i, len; } DLex;
 
@@ -139,7 +138,7 @@ static int d_accept(DLex* lx, char c){ d_skip(lx); if(d_peek(lx)==c){ lx->i++; r
 
 static Node* d_parse_expr(DLex* lx); /* fwd */
 
-/* Fixed numeric scanner for the tiny AST parser (handles exponents correctly) */
+// Fixed numeric scanner for the tiny AST parser (handles exponents correctly)
 static Node* d_parse_number(DLex* lx){
     d_skip(lx);
     int seen_digit=0;
@@ -266,7 +265,7 @@ static Node* d_parse_expr(DLex* lx){
 static int is_var(Node* n, const char* x){ return n->type==N_VAR && strcmp(n->name,x)==0; }
 static int is_num(Node* n, double v){ return n->type==N_NUM && fabs(n->num - v) < 1e-15; }
 
-/* Differentiator and simplifier (uses Node API) */
+// Differentiator and simplifier (uses Node API)
 
 static Node* d_diff(Node* n, const char* x){
     if(!n) return nd_num(0);
@@ -318,7 +317,7 @@ static Node* d_diff(Node* n, const char* x){
     return nd_num(0);
 }
 
-/* Simplifier (light) */
+// Simplifier (light)
 
 static Node* s_simpl(Node* n){
     if(!n) return n;
@@ -344,7 +343,7 @@ static Node* s_simpl(Node* n){
     return n;
 }
 
-/* Pretty-print AST -> string */
+// Pretty-print AST -> string
 
 static void p_buf(char** out, size_t* cap, const char* s){
     size_t need=strlen(s);
@@ -469,7 +468,7 @@ static Node* expand_node(Node* n, mp_context* ctx) {
 
 /* ---------- Public API for diff module ---------- */
 
-/* diff_expr_ctx: Parses expr, expands user functions using ctx, differentiates, simplifies, returns string */
+// diff_expr_ctx: Parses expr, expands user functions using ctx, differentiates, simplifies, returns string
 static char* diff_expr_ctx(mp_context* ctx, const char* expr, const char* var) {
     if (!expr || !var) {
         return strdup("NaN");
@@ -502,7 +501,7 @@ static char* diff_expr_ctx(mp_context* ctx, const char* expr, const char* var) {
     return result;
 }
 
-/* Backwards-compatible wrapper: diff_expr (no ctx) behaves as before */
+// Backwards-compatible wrapper: diff_expr (no ctx) behaves as before 
 static char* diff_expr(const char* expr, const char* var) {
     if (!expr || !var) return strdup("NaN");
     DLex lx = { expr, 0, strlen(expr) };
@@ -517,7 +516,7 @@ static char* diff_expr(const char* expr, const char* var) {
     return result;
 }
 
-/* Create a derivative function: dst_name(params...) = d/d(wrt) src_name(body) */
+// Create a derivative function: dst_name(params...) = d/d(wrt) src_name(body) 
 static int diff_func(mp_context* ctx, const char* src_name, const char* wrt, const char* dst_name){
     if (!ctx) return 0;
 
