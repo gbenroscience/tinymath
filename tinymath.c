@@ -22,6 +22,9 @@
 #include "parser_api.h"
 #include "diff_module.h"
 
+
+#define STMT_PREVIEW_LEN 256
+
 // Local constant for pi
 static const double PI = 3.14159265358979323846;
 typedef enum
@@ -41,7 +44,7 @@ typedef struct
 
 struct mp_context
 {
-    int suppress_print;//when set, parse_program / parse_statement should not print evaluation results. We temporarily set it while evaluating a function body.
+    int suppress_print; // when set, parse_program / parse_statement should not print evaluation results. We temporarily set it while evaluating a function body.
     mp_var *vars;
     size_t n_vars;
     size_t vars_capacity;
@@ -1435,14 +1438,13 @@ void init_constants(mp_context *ctx)
     set_const(ctx, "Na", 6.02214076e23);
 }
 
+
 static double parse_program(mp_parser *p)
 {
     mp_context *ctx = p->ctx;
-    if (!ctx)
-        return 0.0;
+    if (!ctx) return 0.0;
 
-    if (!ctx->constants_initialized)
-    {
+    if (!ctx->constants_initialized) {
         init_constants(ctx);
         ctx->constants_initialized = 1;
     }
@@ -1450,32 +1452,54 @@ static double parse_program(mp_parser *p)
     double last_value = NAN;
     int has_value = 0;
 
-    while (p->cur.kind != TK_END)
-    {
+    while (p->cur.kind != TK_END) {
         size_t stmt_start = p->cur.pos;
         StmtResult r = parse_statement(p);
         size_t stmt_end = p->lx.i;
 
-        size_t len = stmt_end - stmt_start;
-        char stmt[256];
-        if (len >= sizeof(stmt))
-            len = sizeof(stmt) - 1;
-        memcpy(stmt, p->lx.input + stmt_start, len);
-        stmt[len] = '\0';
+        /* Defensive bounds checks */
+        if (stmt_start > p->lx.len) stmt_start = p->lx.len;
+        if (stmt_end > p->lx.len) stmt_end = p->lx.len;
+        size_t len = (stmt_end >= stmt_start) ? (stmt_end - stmt_start) : 0;
 
-        if (r.kind == STMT_VALUE)
-        {
-            if (!ctx->suppress_print)
-                printf("%s => %.17g\n", stmt, r.value);
+        char *stmt = NULL;
+        char small_buf[STMT_PREVIEW_LEN];
+        int used_small = 0;
+
+        if (len == 0) {
+            /* empty statement */
+            small_buf[0] = '\0';
+            used_small = 1;
+        } else {
+            stmt = malloc(len + 1);
+            if (!stmt) {
+                /* allocation failed -> use small, truncated buffer */
+                size_t slen = (len < sizeof(small_buf) - 1) ? len : (sizeof(small_buf) - 1);
+                if (slen > 0)
+                    memcpy(small_buf, p->lx.input + stmt_start, slen);
+                small_buf[slen] = '\0';
+                used_small = 1;
+            } else {
+                memcpy(stmt, p->lx.input + stmt_start, len);
+                stmt[len] = '\0';
+            }
+        }
+
+        if (r.kind == STMT_VALUE) {
+            if (!ctx->suppress_print) {
+                if (used_small) printf("%s => %.17g\n", small_buf, r.value);
+                else printf("%s => %.17g\n", stmt, r.value);
+            }
             last_value = r.value;
             has_value = 1;
-        }
-        else if (r.kind == STMT_DEFINITION)
-        {
-            if (!ctx->suppress_print)
-                printf("%s => function defined\n", stmt);
+        } else if (r.kind == STMT_DEFINITION) {
+            if (!ctx->suppress_print) {
+                if (used_small) printf("%s => function defined\n", small_buf);
+                else printf("%s => function defined\n", stmt);
+            }
         }
 
+        if (stmt) free(stmt);
         accept(p, TK_SEMI);
     }
 
