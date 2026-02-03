@@ -33,7 +33,14 @@ f(a,b)=12*a-9*b;"
 ```
 
 ## Maximum speed:
-The first law of achieving high speed with **tinymath** is to set `suppress_print` to 1. The only time you dont need this is whne you are debugging stuff, for whatever reason. For all normal usage, pass 1 to the **exec_with_ctx** function and everywhere that `suppress_print` is needed. The `exec(const char *script)` method already has `suppress_print` set to 1. To execute a script or statement and see the results log, use `exec_with_log(const char *script)` The `suppress_print` field is set to true for this function and will run slower than the `exec(const char *script)` method.
+The first law of achieving high speed with **tinymath** is to set `suppress_print` to 1. The only time you dont need this is when you are debugging stuff, for whatever reason. For all normal usage, pass 1 to the **exec_with_ctx** function and everywhere that `suppress_print` is needed. The `exec(const char *script)` method already has `suppress_print` set to 1. To execute a script or statement and see the results log, use `exec_with_log(const char *script)` The `suppress_print` field is set to true for this function and will run slower than the `exec(const char *script)` method.
+
+The parser is plenty fast. On my machine, it does between 100 and 150microseconds to evaluate:
+```C
+const char *script = "x=8;22*cos(x)+5^3;sin(1)+cos(1)+tan(1)+log(10)+sqrt(16)+exp(1)+pow(2,8)+abs(-42)+sum(1,2,3,4,5);";
+```
+
+On the way is an even faster version on the `speed-upgrade` branch which 
 
 
 ### Expression parsing
