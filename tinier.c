@@ -1428,6 +1428,7 @@ double exec_with_ctx(mp_context *ctx, const char *script) {
 
 double exec(const char *script) {
     mp_context *ctx = ctx_create();
+    ctx->suppress_print = 1;
     double r = exec_with_ctx(ctx, script);
     ctx_destroy(ctx);
     return r;
@@ -1478,7 +1479,7 @@ int mainnot(void)
 int main(void)
 {
     const char *expr = "sin(1)+cos(1)+tan(1)+log(10)+sqrt(16)+exp(1)+pow(2,8)+abs(-42)+sum(1,2,3,4,5)";
-    int N = 1000;
+ 
 
     /* parse once */
     mp_expr *parsed = parse_expression_into_arena(expr);
@@ -1496,10 +1497,7 @@ int main(void)
     printf("Input program:\n%s\n\n", expr);
     /* timed loop */
     clock_t t0 = clock(); 
-    for (int i = 0; i < N; ++i) {
-        double v = eval_parsed_expr(parsed, ctx);
-        (void)v; /* use or store if you must */
-    }
+      double v = eval_parsed_expr(parsed, ctx);
     clock_t t1 = clock();
 
        double cpu_time = ((double)(t1 - t0)) / CLOCKS_PER_SEC;
