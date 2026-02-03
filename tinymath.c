@@ -1821,7 +1821,8 @@ int mainGeneral(int argc, char **argv)
             "diff(diff(diff(sin(x), x), x), x);"
             "diff(sin(x), x, pi);";
             */
-        script = "x=8;22*cos(x)+5^3;sin(1)+cos(1)+tan(1)+log(10)+sqrt(16)+exp(1)+pow(2,8)+abs(-42)+sum(1,2,3,4,5);";
+        //script = "x=8;22*cos(x)+5^3;sin(1)+cos(1)+tan(1)+log(10)+sqrt(16)+exp(1)+pow(2,8)+abs(-42)+sum(1,2,3,4,5);";
+        script = "sin(1)+cos(1)+tan(1)+log(10)+sqrt(16)+exp(1)+pow(2,8)+abs(-42)+sum(1,2,3,4,5);";
     }
     clock_t start, end;
     double cpu_time_used;
