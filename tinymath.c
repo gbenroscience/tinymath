@@ -18,7 +18,9 @@
 #include <ctype.h>
 #include <math.h>
 #include <time.h>
+#include <windows.h>
 
+ 
 #include "parser_api.h"
 #include "diff_module.h"
 
@@ -342,7 +344,7 @@ static mp_token next_token(mp_lexer *lx)
 }
 
 static void advance(mp_parser *p) { p->cur = next_token(&p->lx); }
-static int accept(mp_parser *p, mp_tok_kind k)
+static int adopt(mp_parser *p, mp_tok_kind k)
 {
     if (p->cur.kind == k)
     {
@@ -639,7 +641,7 @@ static double call_stat(const char *name, double *args, int n_args)
 
     return NAN;
 }
-/* ---------------- Built-in functions (accept ctx for trig mode side-effects) ---------------- */
+/* ---------------- Built-in functions (adopt ctx for trig mode side-effects) ---------------- */
 
 static double call_builtin(mp_context *ctx, const char *name, double *args, int n)
 {
@@ -796,7 +798,7 @@ static mp_result parse_primary(mp_parser *p)
         snprintf(name, sizeof(name), "%s", p->cur.ident);
         advance(p);
 
-        if (strcmp(name, "diff") == 0 && accept(p, TK_LPAREN))
+        if (strcmp(name, "diff") == 0 && adopt(p, TK_LPAREN))
         {
             if (ctx)
                 ctx->symbolic_mode = 1;
@@ -804,7 +806,7 @@ static mp_result parse_primary(mp_parser *p)
             if (ctx)
                 ctx->symbolic_mode = 0;
 
-            if (!accept(p, TK_COMMA))
+            if (!adopt(p, TK_COMMA))
             {
                 fprintf(stderr, "Expected ',' in diff()\n");
                 if (inner.type == RES_STR)
@@ -823,10 +825,10 @@ static mp_result parse_primary(mp_parser *p)
             snprintf(var, sizeof(var), "%s", p->cur.ident);
             advance(p);
 
-            if (accept(p, TK_COMMA))
+            if (adopt(p, TK_COMMA))
             {
                 mp_result point = parse_expr(p);
-                if (!accept(p, TK_RPAREN))
+                if (!adopt(p, TK_RPAREN))
                 {
                     fprintf(stderr, "Expected ')' in diff()\n");
                     if (inner.type == RES_STR)
@@ -881,7 +883,7 @@ static mp_result parse_primary(mp_parser *p)
             }
             else
             {
-                if (!accept(p, TK_RPAREN))
+                if (!adopt(p, TK_RPAREN))
                 {
                     fprintf(stderr, "Expected ')' in diff()\n");
                     if (inner.type == RES_STR)
@@ -904,11 +906,11 @@ static mp_result parse_primary(mp_parser *p)
             }
         }
 
-        if (accept(p, TK_LPAREN))
+        if (adopt(p, TK_LPAREN))
         {
             mp_result *args = NULL;
             int n_args = 0;
-            if (!accept(p, TK_RPAREN))
+            if (!adopt(p, TK_RPAREN))
             {
                 do
                 {
@@ -925,8 +927,8 @@ static mp_result parse_primary(mp_parser *p)
                     }
                     args = tmp;
                     args[n_args++] = r;
-                } while (accept(p, TK_COMMA));
-                if (!accept(p, TK_RPAREN))
+                } while (adopt(p, TK_COMMA));
+                if (!adopt(p, TK_RPAREN))
                 {
                     fprintf(stderr, "Missing ')' in function call\n");
                     for (int j = 0; j < n_args; ++j)
@@ -1139,15 +1141,15 @@ static mp_result parse_primary(mp_parser *p)
         return make_num(NAN);
     }
 
-    if (accept(p, TK_LPAREN))
+    if (adopt(p, TK_LPAREN))
     {
         mp_result r = parse_expr(p);
-        if (!accept(p, TK_RPAREN))
+        if (!adopt(p, TK_RPAREN))
             fprintf(stderr, "Missing ')'\n");
         return r;
     }
 
-    if (accept(p, TK_MINUS))
+    if (adopt(p, TK_MINUS))
     {
         mp_result r = parse_primary(p);
         if (r.type == RES_NUM)
@@ -1162,7 +1164,7 @@ static mp_result parse_primary(mp_parser *p)
         return r;
     }
 
-    if (accept(p, TK_PLUS))
+    if (adopt(p, TK_PLUS))
         return parse_primary(p);
 
     fprintf(stderr, "Unexpected token in primary (pos %zu)\n", p->lx.i);
@@ -1172,7 +1174,7 @@ static mp_result parse_primary(mp_parser *p)
 static mp_result parse_factor(mp_parser *p)
 {
     mp_result v = parse_primary(p);
-    if (accept(p, TK_CARET))
+    if (adopt(p, TK_CARET))
     {
         mp_result rhs = parse_factor(p);
         v = pow_result(v, rhs);
@@ -1216,7 +1218,7 @@ static mp_result parse_expr(mp_parser *p)
 static int parse_func_def(mp_parser *p, const char *fname)
 {
     mp_context *ctx = p->ctx;
-    if (!accept(p, TK_LPAREN))
+    if (!adopt(p, TK_LPAREN))
     {
         fprintf(stderr, "Error: Expected '(' after function name '%s'\n", fname);
         return 0;
@@ -1251,12 +1253,12 @@ static int parse_func_def(mp_parser *p, const char *fname)
         }
     }
 
-    if (!accept(p, TK_RPAREN))
+    if (!adopt(p, TK_RPAREN))
     {
         fprintf(stderr, "Error: Expected ')' after parameters in '%s'\n", fname);
         return 0;
     }
-    if (!accept(p, TK_EQ))
+    if (!adopt(p, TK_EQ))
     {
         fprintf(stderr, "Error: Expected '=' to define function '%s'\n", fname);
         return 0;
@@ -1363,14 +1365,14 @@ static StmtResult parse_statement(mp_parser *p)
             }
         }
 
-        if (strcmp(name, "df") == 0 && accept(p, TK_LPAREN))
+        if (strcmp(name, "df") == 0 && adopt(p, TK_LPAREN))
         {
             if (p->cur.kind == TK_IDENT)
             {
                 char src[MAX_IDENT_LEN];
                 snprintf(src, sizeof(src), "%s", p->cur.ident);
                 advance(p);
-                if (!accept(p, TK_COMMA))
+                if (!adopt(p, TK_COMMA))
                 {
                     fprintf(stderr, "Expected ',' in df()\n");
                     return res;
@@ -1380,7 +1382,7 @@ static StmtResult parse_statement(mp_parser *p)
                     char wrt[MAX_IDENT_LEN];
                     snprintf(wrt, sizeof(wrt), "%s", p->cur.ident);
                     advance(p);
-                    if (!accept(p, TK_RPAREN))
+                    if (!adopt(p, TK_RPAREN))
                     {
                         fprintf(stderr, "Expected ')' in df()\n");
                         return res;
@@ -1521,7 +1523,7 @@ static double parse_program(mp_parser *p)
             }
         }
 
-        accept(p, TK_SEMI);
+        adopt(p, TK_SEMI);
     }
 
     return has_value ? last_value : 0.0;
@@ -1542,21 +1544,25 @@ void log_results(mp_context *ctx)
         }
     }
 }
-void clear_results(mp_context *ctx) {
-    if (!ctx) return;
+void clear_results(mp_context *ctx)
+{
+    if (!ctx)
+        return;
 
     // Free all stored strings
-    for (size_t i = 0; i < ctx->n_results; i++) {
+    for (size_t i = 0; i < ctx->n_results; i++)
+    {
         free(ctx->results[i]);
         ctx->results[i] = NULL;
     }
 
     // Reset the counter, but keep ctx->cap_results as is (for reuse)
     ctx->n_results = 0;
-// Context management & exec API
+    // Context management & exec API
 }
 
-mp_context *ctx_create(void){
+mp_context *ctx_create(void)
+{
     mp_context *ctx = (mp_context *)calloc(1, sizeof(mp_context));
     if (!ctx)
         return NULL;
@@ -1714,13 +1720,116 @@ int main(int argc, char **argv)
             */
         script = "x=8;22*cos(x)+5^3;sin(1)+cos(1)+tan(1)+log(10)+sqrt(16)+exp(1)+pow(2,8)+abs(-42)+sum(1,2,3,4,5);";
     }
+     
+
+    printf("Input program:\n%s\n\n", script);
+
+    LARGE_INTEGER frequency, start, end;
+    QueryPerformanceFrequency(&frequency); // Get counts per second
+    QueryPerformanceCounter(&start);
+
+    double result = exec(script);
+    QueryPerformanceCounter(&end);
+double interval = (double)(end.QuadPart - start.QuadPart) / frequency.QuadPart;
+ 
+    printf("Time taken: %f seconds\n", interval);
+
+    printf("\nLast evaluated value: %.17g\n", result);
+
+    free(filebuf);
+    return 0;
+}
+
+
+// Demo main
+int mainGeneral(int argc, char **argv)
+{
+    const char *script = NULL;
+    char *filebuf = NULL;
+
+    if (argc >= 2)
+    {
+        const char *arg = argv[1];
+        /* If the first character is '@' treat as filename, else treat as inline script.
+           This avoids ambiguity if scripts contain spaces; use @filename to load file. */
+        if (arg[0] == '@')
+        {
+            const char *fname = arg + 1;
+            FILE *f = fopen(fname, "rb");
+            if (!f)
+            {
+                fprintf(stderr, "Failed to open script file: %s\n", fname);
+                return 1;
+            }
+            fseek(f, 0, SEEK_END);
+            long sz = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            filebuf = malloc((size_t)sz + 1);
+            if (!filebuf)
+            {
+                fclose(f);
+                fprintf(stderr, "Out of memory\n");
+                return 1;
+            }
+            if (fread(filebuf, 1, (size_t)sz, f) != (size_t)sz)
+            {
+                fclose(f);
+                free(filebuf);
+                fprintf(stderr, "Read error\n");
+                return 1;
+            }
+            fclose(f);
+            filebuf[sz] = '\0';
+            script = filebuf;
+        }
+        else
+        {
+            /* treat argv[1] as inline script (no need for quoting) */
+            script = argv[1];
+        }
+    }
+    else
+    {
+        /* default demo script (unchanged) */
+        /*script =
+            "f(a,b)=a*a+b*2;"
+            "x=10;"
+            "y=3;"
+            "f(20,5);"
+            "sin(pi/2);"
+            "DEG();"
+            "sin(21);"
+            "RAD();"
+            "sin(21);"
+            "GRAD();"
+            "sin(21);"
+            "MODE();"
+            "f(2,5);"
+            "sum(3,5,7,9,sin(pi/2),12);"
+            "4%3;"
+            "10%3;"
+            "(13%9)+2^(5%3);"
+            "-10%3;"
+            "GRAD();"
+            "sin(pi/2);"
+            "g(x)=x^3-2*x+1;"
+            "g(3);"
+            "diff(g(x)-sin(x), x);"
+            "diff(g(x),x, 3);"
+            "diff(sin(x^2-3*x-2), x);"
+            "diff(diff(sin(x), x), x);"
+            "diff(diff(diff(sin(x), x), x), x);"
+            "diff(sin(x), x, pi);";
+            */
+        script = "x=8;22*cos(x)+5^3;sin(1)+cos(1)+tan(1)+log(10)+sqrt(16)+exp(1)+pow(2,8)+abs(-42)+sum(1,2,3,4,5);";
+    }
     clock_t start, end;
     double cpu_time_used;
 
     printf("Input program:\n%s\n\n", script);
+
     start = clock();
     double result = exec(script);
-
     end = clock();
     cpu_time_used = ((double)(end - start)) / CLOCKS_PER_SEC;
     printf("Time taken: %f seconds\n", cpu_time_used);
