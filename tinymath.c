@@ -22,7 +22,6 @@
 #include "parser_api.h"
 #include "diff_module.h"
 
-
 #define STMT_PREVIEW_LEN 256
 
 // Local constant for pi
@@ -55,6 +54,9 @@ struct mp_context
 
     int symbolic_mode; /* 1 = symbolic mode enabled */
     trig_mode_t trig_mode;
+    char **results;
+    size_t n_results;
+    size_t results_capacity;
 
     int constants_initialized;
 };
@@ -1438,13 +1440,14 @@ void init_constants(mp_context *ctx)
     set_const(ctx, "Na", 6.02214076e23);
 }
 
-
 static double parse_program(mp_parser *p)
 {
     mp_context *ctx = p->ctx;
-    if (!ctx) return 0.0;
+    if (!ctx)
+        return 0.0;
 
-    if (!ctx->constants_initialized) {
+    if (!ctx->constants_initialized)
+    {
         init_constants(ctx);
         ctx->constants_initialized = 1;
     }
@@ -1452,64 +1455,108 @@ static double parse_program(mp_parser *p)
     double last_value = NAN;
     int has_value = 0;
 
-    while (p->cur.kind != TK_END) {
+    while (p->cur.kind != TK_END)
+    {
         size_t stmt_start = p->cur.pos;
         StmtResult r = parse_statement(p);
         size_t stmt_end = p->lx.i;
 
         /* Defensive bounds checks */
-        if (stmt_start > p->lx.len) stmt_start = p->lx.len;
-        if (stmt_end > p->lx.len) stmt_end = p->lx.len;
+        if (stmt_start > p->lx.len)
+            stmt_start = p->lx.len;
+        if (stmt_end > p->lx.len)
+            stmt_end = p->lx.len;
         size_t len = (stmt_end >= stmt_start) ? (stmt_end - stmt_start) : 0;
 
-        char *stmt = NULL;
         char small_buf[STMT_PREVIEW_LEN];
-        int used_small = 0;
+        const char *stmt_text = "...";
 
-        if (len == 0) {
-            /* empty statement */
-            small_buf[0] = '\0';
-            used_small = 1;
-        } else {
-            stmt = malloc(len + 1);
-            if (!stmt) {
-                /* allocation failed -> use small, truncated buffer */
-                size_t slen = (len < sizeof(small_buf) - 1) ? len : (sizeof(small_buf) - 1);
-                if (slen > 0)
-                    memcpy(small_buf, p->lx.input + stmt_start, slen);
-                small_buf[slen] = '\0';
-                used_small = 1;
-            } else {
-                memcpy(stmt, p->lx.input + stmt_start, len);
-                stmt[len] = '\0';
-            }
+        // Get statement text for the result string
+        if (len > 0)
+        {
+            size_t slen = (len < sizeof(small_buf) - 1) ? len : (sizeof(small_buf) - 1);
+            memcpy(small_buf, p->lx.input + stmt_start, slen);
+            small_buf[slen] = '\0';
+            stmt_text = small_buf;
         }
 
-        if (r.kind == STMT_VALUE) {
-            if (!ctx->suppress_print) {
-                if (used_small) printf("%s => %.17g\n", small_buf, r.value);
-                else printf("%s => %.17g\n", stmt, r.value);
-            }
+        // --- Result Storage Logic ---
+        char res_buffer[256];
+        int res_len = 0;
+
+        if (r.kind == STMT_VALUE)
+        {
+            res_len = snprintf(res_buffer, sizeof(res_buffer), "%s => %.17g", stmt_text, r.value);
             last_value = r.value;
             has_value = 1;
-        } else if (r.kind == STMT_DEFINITION) {
-            if (!ctx->suppress_print) {
-                if (used_small) printf("%s => function defined\n", small_buf);
-                else printf("%s => function defined\n", stmt);
+        }
+        else if (r.kind == STMT_DEFINITION)
+        {
+            res_len = snprintf(res_buffer, sizeof(res_buffer), "%s => function defined", stmt_text);
+        }
+
+        if (res_len > 0)
+        {
+            // 1. Console Output (if not suppressed)
+            if (!ctx->suppress_print)
+            {
+                printf("%s\n", res_buffer);
+            }
+
+            // 2. Push to ctx->results
+            if (ctx->n_results >= ctx->results_capacity)
+            {
+                size_t new_cap = ctx->results_capacity == 0 ? 8 : ctx->results_capacity * 2;
+                char **new_res = realloc(ctx->results, new_cap * sizeof(char *));
+                if (new_res)
+                {
+                    ctx->results = new_res;
+                    ctx->results_capacity = new_cap;
+                }
+            }
+
+            if (ctx->n_results < ctx->results_capacity)
+            {
+                ctx->results[ctx->n_results++] = strdup(res_buffer);
             }
         }
 
-        if (stmt) free(stmt);
         accept(p, TK_SEMI);
     }
 
     return has_value ? last_value : 0.0;
 }
 
-// Context management & exec API
-
-mp_context *ctx_create(void)
+void log_results(mp_context *ctx)
 {
+    if (!ctx || ctx->n_results == 0)
+    {
+        return;
+    }
+
+    for (size_t i = 0; i < ctx->n_results; i++)
+    {
+        if (ctx->results[i])
+        {
+            printf("%s\n", ctx->results[i]);
+        }
+    }
+}
+void clear_results(mp_context *ctx) {
+    if (!ctx) return;
+
+    // Free all stored strings
+    for (size_t i = 0; i < ctx->n_results; i++) {
+        free(ctx->results[i]);
+        ctx->results[i] = NULL;
+    }
+
+    // Reset the counter, but keep ctx->cap_results as is (for reuse)
+    ctx->n_results = 0;
+// Context management & exec API
+}
+
+mp_context *ctx_create(void){
     mp_context *ctx = (mp_context *)calloc(1, sizeof(mp_context));
     if (!ctx)
         return NULL;
@@ -1541,13 +1588,23 @@ void ctx_destroy(mp_context *ctx)
     ctx->n_vars = 0;
     ctx->vars_capacity = 0;
 
+    for (size_t i = 0; i < ctx->n_results; i++)
+    {
+        free(ctx->results[i]);
+        ctx->results[i] = NULL;
+    }
+    free(ctx->results);
+    ctx->n_results = 0;
+    ctx->results_capacity = 0;
+
     free(ctx);
 }
 
-double exec_with_ctx(mp_context *ctx, const char *script)
+double exec_with_ctx(mp_context *ctx, const char *script, int suppress_print)
 {
     if (!ctx || !script)
         return 0.0;
+    ctx->suppress_print = suppress_print;
     mp_parser p = {{script, 0, strlen(script)}, {0}, ctx};
     advance(&p);
     return parse_program(&p);
@@ -1558,7 +1615,19 @@ double exec(const char *script)
     mp_context *ctx = ctx_create();
     if (!ctx)
         return 0.0;
-    double res = exec_with_ctx(ctx, script);
+    double res = exec_with_ctx(ctx, script, 1);
+    ctx_destroy(ctx);
+    return res;
+}
+
+double exec_with_log(const char *script)
+{
+    mp_context *ctx = ctx_create();
+    ctx->suppress_print = 1;
+    if (!ctx)
+        return 0.0;
+    double res = exec_with_ctx(ctx, script, 0);
+    log_results(ctx);
     ctx_destroy(ctx);
     return res;
 }
@@ -1643,7 +1712,7 @@ int main(int argc, char **argv)
             "diff(diff(diff(sin(x), x), x), x);"
             "diff(sin(x), x, pi);";
             */
-        script = "sin(1)+cos(1)+tan(1)+log(10)+sqrt(16)+exp(1)+pow(2,8)+abs(-42)+sum(1,2,3,4,5);";
+        script = "x=8;22*cos(x)+5^3;sin(1)+cos(1)+tan(1)+log(10)+sqrt(16)+exp(1)+pow(2,8)+abs(-42)+sum(1,2,3,4,5);";
     }
     clock_t start, end;
     double cpu_time_used;
@@ -1651,6 +1720,7 @@ int main(int argc, char **argv)
     printf("Input program:\n%s\n\n", script);
     start = clock();
     double result = exec(script);
+
     end = clock();
     cpu_time_used = ((double)(end - start)) / CLOCKS_PER_SEC;
     printf("Time taken: %f seconds\n", cpu_time_used);

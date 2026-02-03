@@ -44,6 +44,6 @@ int define_func(mp_context *ctx, const char *name, const char params[][MAX_IDENT
  */
 mp_context* ctx_create(void);
 void ctx_destroy(mp_context *ctx);
-double exec_with_ctx(mp_context *ctx, const char *script);
+double exec_with_ctx(mp_context *ctx, const char *script, int suppress_print);
 
 #endif /* PARSER_API_H */

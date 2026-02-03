@@ -163,6 +163,13 @@ int main(int argc, char **argv)
             {0}, 0,
             {"^(2)", "3"}, 2
         },
+        {
+            "diff_check",
+            "h(x)=cos(3*x); diff(h(x), x, 3);",
+            {0}, 0,
+            {"^(2)", "3"}, 2
+        }
+        
     };
     int n_tests = sizeof(tests) / sizeof(tests[0]);
 

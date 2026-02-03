@@ -3,6 +3,39 @@
 **tinymath** is a lean, fast and efficient math parser written in native C for maximum speed.
 It has, inbuilt into it, the ability to do expression parsing, variables arithmetic, trigonometric computations, functions creation and evaluation, derivatives evaluation and computation and statistics.
 
+# Of statements and scripts
+
+A statement is a math expression, or a variable assignment or a function definition. A statement in tinymath must end with a semicolon.
+Examples of statements:
+1. 2+2;
+2. 3+1;
+3. (4+5)*8*sin(2);
+4. x=8;
+5. f(a,b)=12*a-9*b;
+
+A script is a combination of statements:
+
+In C, a statement is expressed like this:
+
+```C
+const char* script = "2+2;"
+```
+
+
+In C, a script is expressed like this:
+
+```C
+const char* script = "2+2;
+3+1;
+(4+5)*8*sin(2);
+x=8;
+f(a,b)=12*a-9*b;"
+```
+
+## Maximum speed:
+The first law of achieving high speed with **tinymath** is to set `suppress_print` to 1. The only time you dont need this is whne you are debugging stuff, for whatever reason. For all normal usage, pass 1 to the **exec_with_ctx** function and everywhere that `suppress_print` is needed. The `exec(const char *script)` method already has `suppress_print` set to 1. To execute a script or statement and see the results log, use `exec_with_log(const char *script)` The `suppress_print` field is set to true for this function and will run slower than the `exec(const char *script)` method.
+
+
 ### Expression parsing
 ```
 2+2;
@@ -224,3 +257,23 @@ Compile with: gcc -O2 -std=c99 -Wall -pthread -o shared_ctx_example shared_ctx_e
 To run the provided tests, on Windows, fire up a command prompt window, navigate to the project directory and type **run_tests.bat** and then, press **Enter**.
 
 On Linux systems, fire up a terminal window, navigate to the project directory and type **run_tests.sh** and then, press **Enter**
+
+
+The log_results and clear_results functions have been added.
+
+Example usage:
+
+```C
+// ... Initialize ...
+mp_context *ctx = ctx_create();
+int suppress_print = 1;
+
+// --- Script 1 ---
+exec_with_ctx(ctx, "a = 5 * 5; sin(a);", suppress_print);
+log_results(ctx);   // Show results for Script 1
+clear_results(ctx); // Wipe history but keep variables (a is still 25)
+
+// --- Script 2 ---
+exec_with_ctx(ctx, "a + 10;", suppress_print); 
+log_results(ctx);   // Only shows "a + 10 => 35"
+```
