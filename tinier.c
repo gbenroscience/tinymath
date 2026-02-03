@@ -29,6 +29,7 @@
 #include "diff_module.h"
 #include "parser_api.h" /* public API: mp_func, mp_context forward decls, etc. */
 
+#include <windows.h>
 #define MAX_IDENT_LEN 64
 #define MAX_FUNC_PARAMS 32
 
@@ -464,7 +465,7 @@ static token_t next_token(lexer_t *lx) {
 
 
 static void advance(parser_t *p) { p->cur = next_token(&p->lx); }
-static int accept(parser_t *p, tok_t k) { if (p->cur.kind == k) { advance(p); return 1; } return 0; }
+static int adopt(parser_t *p, tok_t k) { if (p->cur.kind == k) { advance(p); return 1; } return 0; }
 
 /* Forward declarations */
 static ASTNode *parse_expr_ast(parser_t *p);
@@ -474,7 +475,7 @@ static ASTNode *parse_primary_ast(parser_t *p);
 /* factor: primary (^ factor)* */
 static ASTNode *parse_factor_ast(parser_t *p) {
     ASTNode *n = parse_primary_ast(p);
-    if (accept(p, TK_CARET)) {
+    if (adopt(p, TK_CARET)) {
         ASTNode *r = parse_factor_ast(p);
         n = ast_binop_p(p, '^', n, r);
     }
@@ -518,18 +519,18 @@ static ASTNode *parse_primary_ast(parser_t *p) {
         advance(p);
 
         /* function call */
-        if (accept(p, TK_LPAREN)) {
+        if (adopt(p, TK_LPAREN)) {
             ASTNode **args = NULL;
             int n_args = 0;
-            if (!accept(p, TK_RPAREN)) {
+            if (!adopt(p, TK_RPAREN)) {
                 do {
                     ASTNode *arg = parse_expr_ast(p);
                     ASTNode **tmp = realloc(args, sizeof(ASTNode*) * (n_args + 1));
                     if (!tmp) { for (int i = 0; i < n_args; ++i) ast_free(args[i]); free(args); return NULL; }
                     args = tmp;
                     args[n_args++] = arg;
-                } while (accept(p, TK_COMMA));
-                if (!accept(p, TK_RPAREN)) {
+                } while (adopt(p, TK_COMMA));
+                if (!adopt(p, TK_RPAREN)) {
                     for (int i = 0; i < n_args; ++i) ast_free(args[i]);
                     free(args);
                     return NULL;
@@ -544,18 +545,18 @@ static ASTNode *parse_primary_ast(parser_t *p) {
         return ast_var_p(p, name);
     }
 
-    if (accept(p, TK_LPAREN)) {
+    if (adopt(p, TK_LPAREN)) {
         ASTNode *e = parse_expr_ast(p);
-        accept(p, TK_RPAREN);
+        adopt(p, TK_RPAREN);
         return e;
     }
 
-    if (accept(p, TK_MINUS)) {
+    if (adopt(p, TK_MINUS)) {
         ASTNode *r = parse_primary_ast(p);
         ASTNode *zero = ast_num_p(p, 0.0);
         return ast_binop_p(p, '-', zero, r);
     }
-    if (accept(p, TK_PLUS)) {
+    if (adopt(p, TK_PLUS)) {
         return parse_primary_ast(p);
     }
 
@@ -1017,7 +1018,7 @@ typedef enum { STMT_VALUE, STMT_DEFINITION, STMT_ERROR } StmtKind;
 typedef struct { StmtKind kind; double value; } StmtResult;
 
 static int parse_func_def_and_store(parser_t *p, const char *fname) {
-    if (!accept(p, TK_LPAREN)) { fprintf(stderr, "Error: Expected '(' after function name '%s'\n", fname); return 0; }
+    if (!adopt(p, TK_LPAREN)) { fprintf(stderr, "Error: Expected '(' after function name '%s'\n", fname); return 0; }
     char params[MAX_FUNC_PARAMS][MAX_IDENT_LEN];
     int n_params = 0;
     while (p->cur.kind == TK_IDENT) {
@@ -1029,8 +1030,8 @@ static int parse_func_def_and_store(parser_t *p, const char *fname) {
         if (p->cur.kind == TK_COMMA) { advance(p); if (p->cur.kind != TK_IDENT) { fprintf(stderr, "Trailing comma\n"); return 0; } }
         else break;
             }
-    if (!accept(p, TK_RPAREN)) { fprintf(stderr, "Error: Expected ')' after parameters\n"); return 0; }
-    if (!accept(p, TK_EQ)) { fprintf(stderr, "Error: Expected '=' to define function\n"); return 0; }
+    if (!adopt(p, TK_RPAREN)) { fprintf(stderr, "Error: Expected ')' after parameters\n"); return 0; }
+    if (!adopt(p, TK_EQ)) { fprintf(stderr, "Error: Expected '=' to define function\n"); return 0; }
 
     size_t body_start_idx = p->cur.pos;
     while (p->cur.kind != TK_SEMI && p->cur.kind != TK_END) advance(p);
@@ -1121,7 +1122,7 @@ static StmtResult parse_statement(parser_t *p) {
             }
 
              /* Special-case: df(src, wrt) -> define derivative function d<src> */
-             if (strcmp(name, "df") == 0 && accept(p, TK_LPAREN)) {
+             if (strcmp(name, "df") == 0 && adopt(p, TK_LPAREN)) {
                  /* Expect: df(src, wrt) */
                  if (p->cur.kind != TK_IDENT) {
                      fprintf(stderr, "Expected function name in df()\n");
@@ -1131,7 +1132,7 @@ static StmtResult parse_statement(parser_t *p) {
                  strncpy(src, p->cur.ident, MAX_IDENT_LEN-1);
                  src[MAX_IDENT_LEN-1] = '\0';
                  advance(p);
-                 if (!accept(p, TK_COMMA)) {
+                 if (!adopt(p, TK_COMMA)) {
                      fprintf(stderr, "Expected ',' in df()\n");
                      return res;
                  }
@@ -1143,7 +1144,7 @@ static StmtResult parse_statement(parser_t *p) {
                  strncpy(wrt, p->cur.ident, MAX_IDENT_LEN-1);
                  wrt[MAX_IDENT_LEN-1] = '\0';
                  advance(p);
-                 if (!accept(p, TK_RPAREN)) {
+                 if (!adopt(p, TK_RPAREN)) {
                      fprintf(stderr, "Expected ')' in df()\n");
                      return res;
                  }
@@ -1246,7 +1247,7 @@ static double parse_program(parser_t *p) {
 
         if (stmt) free(stmt);
 
-        accept(p, TK_SEMI);
+        adopt(p, TK_SEMI);
     }
     return has_value ? last_value : 0.0;
 }
@@ -1478,6 +1479,45 @@ int mainnot(void)
 /* put this at end of tinier.c or compile separately linking in parse_expression_into_arena etc. */
 int main(void)
 {
+    //const char *expr = "sin(1)+cos(1)+tan(1)+log(10)+sqrt(16)+exp(1)+pow(2,8)+abs(-42)+sum(1,2,3,4,5)";
+        const char *expr = "x=8;22*cos(x)+5^3;sin(1)+cos(1)+tan(1)+log(10)+sqrt(16)+exp(1)+pow(2,8)+abs(-42)+sum(1,2,3,4,5);";
+ 
+
+    /* parse once */
+    mp_expr *parsed = parse_expression_into_arena(expr);
+    if (!parsed) { fprintf(stderr, "Parse failed\n"); return 1; }
+
+    /* create a context if eval needs trig mode / vars etc. */
+    mp_context *ctx = ctx_create();
+    /* example: set trig mode or any needed globals */
+    ctx->trig_mode = 0; /* radians, or 1 for degrees based on your needs */
+
+    /* warm-up (optional) */
+    double r = eval_parsed_expr(parsed, ctx);
+    (void)r;
+
+    printf("Input program:\n%s\n\n", expr);
+
+        LARGE_INTEGER frequency, start, end;
+    QueryPerformanceFrequency(&frequency); // Get counts per second
+    QueryPerformanceCounter(&start);
+      double result = eval_parsed_expr(parsed, ctx);
+    QueryPerformanceCounter(&end);
+double interval = (double)(end.QuadPart - start.QuadPart) / frequency.QuadPart;
+ 
+    printf("Time taken: %f seconds\n", interval);
+
+    printf("\nLast evaluated value: %.17g\n", result);
+
+    /* cleanup */
+    free_parsed_expr(parsed);
+    ctx_destroy(ctx);
+    return 0;
+}
+
+
+int mainGeneral(void)
+{
     const char *expr = "sin(1)+cos(1)+tan(1)+log(10)+sqrt(16)+exp(1)+pow(2,8)+abs(-42)+sum(1,2,3,4,5)";
  
 
@@ -1508,5 +1548,6 @@ int main(void)
     ctx_destroy(ctx);
     return 0;
 }
+
 
 /* End of tinier.c */
